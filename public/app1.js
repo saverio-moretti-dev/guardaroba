@@ -21,10 +21,10 @@ const S = {
   editId: null,
   filter: LS.get('filter', 'attivi'),
   q: '',
-  folder: LS.get('folder', null),     // {id, photos:[{url}]}
-  uploads: [],                         // {key, thumb, status, blob, target, inboxKey}
+  folder: LS.get('folder', null), // {id, photos:[{url}]}
+  uploads: [], // {key, thumb, status, blob, target, inboxKey}
   ops: [], saving: false, saveErr: false,
-  copied: {},                          // itemId -> Set(campo)
+  copied: {}, // itemId -> Set(campo)
   installEvt: null,
   authed: false,
 };
@@ -59,7 +59,7 @@ async function api(path, opts={}){
 }
 function setDb(db){
   if (!db || typeof db.rev !== 'number') return;
-  if (db.rev < (S.db.rev || 0)) return;           // risposta vecchia (cache): ignora
+  if (db.rev < (S.db.rev || 0)) return; // risposta vecchia (cache): ignora
   const changed = db.rev !== S.db.rev;
   S.db = db; LS.set('dbCache', db);
   if (changed) refresh();
