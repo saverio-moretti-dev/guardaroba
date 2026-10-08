@@ -92,7 +92,7 @@ function applyOps(db, ops, by) {
   db.settings ||= {};
   for (const op of ops || []) {
     if (op.op === 'settings') {
-      for (const k of ['vintedProfile', 'redripNote']) if (op.data && op.data[k] !== undefined) db.settings[k] = String(op.data[k]).slice(0, 500);
+      for (const k of ['vintedProfile', 'redripNote', 'defaultParcel', 'descFooter', 'hashtags']) if (op.data && op.data[k] !== undefined) db.settings[k] = String(op.data[k]).slice(0, 500);
       continue;
     }
     if (!isId(op.id)) continue;

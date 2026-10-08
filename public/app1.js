@@ -117,7 +117,7 @@ function applyOpOn(db, op){ const keep = S.db; S.db = db; applyLocal(op); S.db =
 
 // ====================== Foto: compressione e caricamento ======================
 async function compress(file){
-  const MAX = 1600;
+  const MAX = LS.get('photoMax', 1600);
   let src;
   try{ src = await createImageBitmap(file, {imageOrientation:'from-image'}); }
   catch{
@@ -134,6 +134,7 @@ function ensureFolder(){
 }
 function addFiles(files, target, inboxKeys){
   // target: {kind:'folder'} oppure {kind:'item', id}
+  if (!S.authed){ needActivation(); return; }
   const list = Array.from(files || []);
   list.forEach((f, i) => {
     const folderId = target.kind === 'folder' ? ensureFolder().id : null;
@@ -178,7 +179,7 @@ const pendingFor = (id) => S.uploads.filter(u => u.target.id === id);
 
 // Foto condivise da Google Foto (arrivano tramite il service worker)
 async function drainInbox(){
-  if (!('caches' in window)) return;
+  if (!('caches' in window) || !S.authed) return;
   try{
     const c = await caches.open('share-inbox');
     const keys = await c.keys();
@@ -199,7 +200,8 @@ async function drainInbox(){
 function closeFolder(){
   const f = S.folder;
   if (!f || !f.photos.length) return;
-  queue({op:'upsert', id:f.id, data:{status:'compilare', owner:S.me}});
+  const parcel = (S.db.settings || {}).defaultParcel;
+  queue({op:'upsert', id:f.id, data:{status:'compilare', owner:S.me, ...(parcel ? {parcel} : {})}});
   queue({op:'addPhotos', id:f.id, photos:f.photos.map(p => ({url:p.url}))});
   S.folder = null; LS.set('folder', null);
   toast('Articolo salvato. Contatore azzerato.');
@@ -311,11 +313,15 @@ function buildDescription(it){
   if (it.material) lines.push(`• Materiale: ${it.material}`);
   if (it.measures) lines.push(`• Misure: ${it.measures}`);
   lines.push('');
-  lines.push('Spedisco in giornata o il giorno dopo. Per altre foto o domande scrivimi pure!');
+  const st = S.db.settings || {};
+  const footer = st.descFooter != null && st.descFooter !== '' ? st.descFooter : DEFAULT_FOOTER;
+  if (footer.trim()) lines.push(footer.trim());
   const tags = [it.brand, it.category, ...(it.colors||[]), it.size && !/unica/i.test(it.size) ? 'taglia' + it.size : ''].filter(Boolean).map(hashtag);
-  if (tags.length){ lines.push(''); lines.push([...new Set(tags)].join(' ')); }
+  if (hashtagsOn() && tags.length){ lines.push(''); lines.push([...new Set(tags)].join(' ')); }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
+const DEFAULT_FOOTER = 'Spedisco in giornata o il giorno dopo. Per altre foto o domande scrivimi pure!';
+const hashtagsOn = () => { const v = (S.db.settings || {}).hashtags; return v !== false && v !== 'false'; };
 function buildTitle(it){
   return [it.category, it.brand, it.colors && it.colors[0] ? it.colors[0].toLowerCase() : '', it.size ? 'tg ' + it.size : ''].filter(Boolean).join(' ').slice(0, 100);
 }
@@ -342,7 +348,8 @@ function ask(msg, okLabel='OK'){
 }
 function updateSaveBar(){
   const el = $('#savebar'); if (!el) return;
-  if (S.saveErr) el.innerHTML = '<span class="err">Offline, riprovo…</span>';
+  if (!S.authed) el.textContent = '';
+  else if (S.saveErr) el.innerHTML = '<span class="err">Offline, riprovo…</span>';
   else if (S.saving || S.ops.length) el.innerHTML = '<span class="spin"></span>';
   else el.textContent = 'Salvato ✓';
 }

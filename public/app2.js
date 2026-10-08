@@ -2,8 +2,6 @@
 // ====================== Viste ======================
 function render(){
   const app = $('#app');
-  if (!S.authed){ app.innerHTML = viewLogin(); bindLogin(); return; }
-  if (!S.me){ app.innerHTML = viewName(); bindName(); return; }
   let html = '';
   if (S.view === 'edit' && S.db.items[S.editId]) html = viewEdit();
   else if (S.view === 'copy' && S.db.items[S.editId]) html = viewCopy();
@@ -21,35 +19,6 @@ function refresh(){
   const y = window.scrollY; render(); window.scrollTo(0, y);
 }
 
-function viewLogin(){
-  return `<div class="login stack">
-    <img src="/icon-192.png" width="64" height="64" alt="" style="border-radius:16px">
-    <h1>Guardaroba</h1>
-    <p class="muted" style="margin-top:0">Inserisci il codice condiviso.</p>
-    <form id="lf" class="stack">
-      <input class="t" id="code" autocomplete="current-password" placeholder="Codice" autocapitalize="off" autocorrect="off">
-      <button class="btn primary block" type="submit">Entra</button>
-      <div id="lerr" class="err"></div>
-    </form></div>`;
-}
-function bindLogin(){
-  $('#lf').addEventListener('submit', async e => {
-    e.preventDefault(); $('#lerr').textContent = '';
-    try{
-      const r = await fetch('/api/login', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({code:$('#code').value}), credentials:'same-origin'});
-      if (!r.ok) throw new Error('Codice errato');
-      S.authed = true; start();
-    }catch(err){ $('#lerr').textContent = err.message; }
-  });
-}
-function viewName(){
-  return `<div class="login stack"><h1>Chi sei?</h1><p class="muted" style="margin-top:0">Serve per sapere chi ha caricato o modificato un articolo.</p>
-    <form id="nf" class="stack"><input class="t" id="nm" placeholder="Il tuo nome" autocomplete="given-name"><button class="btn primary block">Continua</button></form></div>`;
-}
-function bindName(){
-  $('#nf').addEventListener('submit', e => { e.preventDefault(); const v = $('#nm').value.trim(); if (!v) return; S.me = v; LS.set('me', v); render(); });
-}
-
 function viewTabs(){
   const nComp = items().filter(i => i.status === 'compilare').length;
   const nBozze = items().filter(i => i.status === 'bozza').length;
@@ -57,7 +26,7 @@ function viewTabs(){
   return `<nav class="tabs"><div class="in">${t('foto', I.cam, 'Foto', S.folder && S.folder.photos.length ? S.folder.photos.length : '')}${t('items', I.list, 'Articoli', nComp)}${t('publish', I.send, 'Pubblica', nBozze)}</div></nav>`;
 }
 function topBar(title){
-  return `<header class="top"><h1>${esc(title)}</h1><span id="savebar" class="savebar"></span><button class="iconbtn" data-act="help" aria-label="Aiuto">?</button><button class="iconbtn" data-act="settings" aria-label="Impostazioni">${I.gear}</button></header>`;
+  return `<header class="top"><h1>${esc(title)}</h1><span id="savebar" class="savebar"></span>${S.authed ? '' : '<button class="pill-btn" data-act="settings">Attiva</button>'}<button class="iconbtn" data-act="help" aria-label="Aiuto">?</button><button class="iconbtn" data-act="settings" aria-label="Impostazioni">${I.gear}</button></header>`;
 }
 function thumbsHtml(photos, uploads, mode, id){
   const ph = photos.map((p, i) => `<div class="thumb"><img loading="lazy" src="${esc(p.url)}" alt=""><span class="n">${i+1}</span>
@@ -85,7 +54,6 @@ function viewFoto(){
       ${errs ? `<button class="btn block" data-act="retry">Riprova caricamento</button>` : ''}
       <button class="btn primary block big" data-act="close" ${!n || busy ? 'disabled' : ''}>${busy ? 'Caricamento…' : 'Salva articolo →'}</button>
     </div>
-    ${S.installEvt ? `<button class="btn block" data-act="install">Installa app</button>` : ''}
     ${recentStrip()}
   </div>`;
 }
@@ -286,27 +254,83 @@ function helpSheet(){
     ${Q('Spunte di stato', 'Da creare → Bozza → Pubblicata → Venduta. Toccale nella scheda per cambiare stato.')}
     ${Q('Redrip', 'Si usa dal computer in Chrome sul tuo guardaroba Vinted. Imposta il link del profilo in ⚙︎.')}
     ${Q('Installare l\'app', 'Android: Chrome → ⋮ → Installa app. iPhone: Safari → Condividi → Aggiungi a Home.')}
-    ${Q('In due', 'Entrate con lo stesso codice. Le modifiche dell\'altro arrivano in meno di un minuto.')}
+    ${Q('Attivazione', 'In ⚙︎ Impostazioni inserisci il codice una volta su ogni telefono o computer: resta attivo.')}
+    ${Q('In due', 'Attivate entrambi con lo stesso codice. Le modifiche dell\'altro arrivano in meno di un minuto.')}
     <button class="btn primary block" style="margin-top:14px" data-close>OK</button>`).addEventListener('click', e => { if (e.target.closest('[data-close]')) e.currentTarget.remove(); });
 }
-async function settingsSheet(){
+function applyTheme(){
+  const t = LS.get('theme', 'auto');
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+}
+function needActivation(){
+  toast('Attiva l\'app con il codice');
+  settingsSheet();
+}
+async function activate(code, name){
+  const r = await fetch('/api/login', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({code}), credentials:'same-origin'});
+  if (!r.ok) throw new Error('Codice errato');
+  if (name){ S.me = name; LS.set('me', name); }
+  S.authed = true;
+  await pull(); flush(); drainInbox();
+}
+function settingsSheet(){
   const st = S.db.settings || {};
   const nPhotos = items().reduce((s,i) => s + (i.photos||[]).length, 0) + (S.folder ? S.folder.photos.length : 0);
   const mb = Math.round(nPhotos * 0.35);
+  const local = {theme: LS.get('theme','auto'), photoMax: LS.get('photoMax',1600), parcel: st.defaultParcel || ''};
+  const opt = (key, list, cur) => `<div class="chips">${list.map(([v,l]) => `<button type="button" class="chip ${String(cur)===String(v)?'on':''}" data-sopt="${key}" data-v="${v}">${l}</button>`).join('')}</div>`;
   const s = sheet(`<h3>Impostazioni</h3>
-    <div class="field"><label class="f">Il tuo nome</label><input class="t" id="s_me" value="${esc(S.me)}"></div>
-    <div class="field"><label class="f">Link profilo Vinted</label><input class="t" id="s_prof" placeholder="https://www.vinted.it/member/…" value="${esc(st.vintedProfile)}"></div>
-    <div class="small muted" style="margin-top:12px">Spazio foto: ~${mb} / 1000 MB</div>
-    <div class="two" style="margin-top:16px"><button class="btn" data-a="logout">Esci</button><button class="btn primary" data-a="save">Salva</button></div>`);
+    <div class="sec"><h4>Attivazione</h4>
+      ${S.authed
+        ? `<div class="row"><span class="grow">Attiva ✓</span><button class="btn" data-a="logout" style="min-height:40px">Disattiva</button></div>`
+        : `<div class="two"><input class="t" id="s_code" placeholder="Codice" autocapitalize="off" autocorrect="off" autocomplete="off"><button class="btn primary" data-a="activate">Attiva</button></div><div id="s_err" class="err" style="margin-top:6px"></div>`}
+    </div>
+    <div class="sec"><h4>Tu</h4>
+      <input class="t" id="s_me" placeholder="Il tuo nome" value="${esc(S.me)}">
+    </div>
+    <div class="sec"><h4>Vinted</h4>
+      <div class="field"><label class="f">Link profilo (per Redrip)</label><input class="t" id="s_prof" placeholder="https://www.vinted.it/member/…" value="${esc(st.vintedProfile)}"></div>
+      <div class="field"><label class="f">Pacco predefinito</label>${opt('parcel', [['','Nessuno'],['Piccolo','Piccolo'],['Medio','Medio'],['Grande','Grande']], local.parcel)}</div>
+      <div class="field"><label class="f">Frase finale della descrizione</label><textarea class="t" id="s_footer" style="min-height:80px" placeholder="${esc(DEFAULT_FOOTER)}">${esc(st.descFooter || '')}</textarea></div>
+      <label class="switch"><span>Hashtag nella descrizione</span><input type="checkbox" id="s_tags" ${hashtagsOn() ? 'checked' : ''}></label>
+    </div>
+    <div class="sec"><h4>App</h4>
+      <div class="field"><label class="f">Tema</label>${opt('theme', [['auto','Automatico'],['light','Chiaro'],['dark','Scuro']], local.theme)}</div>
+      <div class="field"><label class="f">Qualità foto</label>${opt('photoMax', [[1200,'Leggera'],[1600,'Normale'],[2048,'Alta']], local.photoMax)}</div>
+      ${S.installEvt ? `<button class="btn block" data-a="install" style="margin-top:12px">Installa app</button>` : ''}
+      <div class="small muted" style="margin-top:12px">Spazio foto: ~${mb} / 1000 MB</div>
+    </div>
+    <button class="btn primary block" data-a="save" style="margin-top:18px">Salva</button>`);
   s.addEventListener('click', async e => {
+    const c = e.target.closest('[data-sopt]');
+    if (c){
+      local[c.dataset.sopt] = c.dataset.sopt === 'photoMax' ? +c.dataset.v : c.dataset.v;
+      c.parentElement.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
+      if (c.dataset.sopt === 'theme'){ LS.set('theme', local.theme); applyTheme(); }
+      return;
+    }
     const a = e.target.closest('[data-a]'); if (!a) return;
-    if (a.dataset.a === 'save'){
+    const act = a.dataset.a;
+    if (act === 'activate'){
+      a.disabled = true; $('#s_err', s).textContent = '';
+      try{
+        await activate($('#s_code', s).value, $('#s_me', s).value.trim());
+        s.remove(); render(); toast('App attivata ✓'); settingsSheet();
+      }catch(err){ $('#s_err', s).textContent = err.message; a.disabled = false; }
+    } else if (act === 'logout'){
+      await fetch('/api/logout', {method:'POST'}); S.authed = false; s.remove(); render(); toast('Disattivata su questo dispositivo');
+    } else if (act === 'install'){
+      S.installEvt.prompt(); S.installEvt = null; a.remove();
+    } else if (act === 'save'){
       const me = $('#s_me', s).value.trim(); if (me){ S.me = me; LS.set('me', me); }
-      const prof = $('#s_prof', s).value.trim();
-      if (prof !== (st.vintedProfile||'')) queue({op:'settings', data:{vintedProfile:prof}});
+      LS.set('photoMax', local.photoMax);
+      const data = {};
+      const prof = $('#s_prof', s).value.trim(); if (prof !== (st.vintedProfile || '')) data.vintedProfile = prof;
+      if (local.parcel !== (st.defaultParcel || '')) data.defaultParcel = local.parcel;
+      const footer = $('#s_footer', s).value.trim(); if (footer !== (st.descFooter || '')) data.descFooter = footer;
+      const tags = $('#s_tags', s).checked; if (tags !== hashtagsOn()) data.hashtags = tags ? 'true' : 'false';
+      if (Object.keys(data).length) queue({op:'settings', data});
       s.remove(); render(); toast('Salvato');
-    } else if (a.dataset.a === 'logout'){
-      await fetch('/api/logout', {method:'POST'}); S.authed = false; s.remove(); render();
     }
   });
 }
@@ -358,10 +382,10 @@ function bind(){
       return;
     }
     switch (d.act){
-      case 'cam': pickTarget = {kind:'folder'}; $('#camIn').click(); break;
-      case 'gal': pickTarget = {kind:'folder'}; $('#galIn').click(); break;
-      case 'cam-item': pickTarget = {kind:'item', id:S.editId}; $('#camIn').click(); break;
-      case 'gal-item': pickTarget = {kind:'item', id:S.editId}; $('#galIn').click(); break;
+      case 'cam': if (!S.authed) return needActivation(); pickTarget = {kind:'folder'}; $('#camIn').click(); break;
+      case 'gal': if (!S.authed) return needActivation(); pickTarget = {kind:'folder'}; $('#galIn').click(); break;
+      case 'cam-item': if (!S.authed) return needActivation(); pickTarget = {kind:'item', id:S.editId}; $('#camIn').click(); break;
+      case 'gal-item': if (!S.authed) return needActivation(); pickTarget = {kind:'item', id:S.editId}; $('#galIn').click(); break;
       case 'close': closeFolder(); break;
       case 'discard': discardFolder(); break;
       case 'retry': retryUploads(); break;
@@ -426,8 +450,9 @@ async function start(){
 }
 (async function boot(){
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  applyTheme();
   try{ const r = await fetch('/api/me', {credentials:'same-origin'}); S.authed = (await r.json()).ok; }
   catch{ S.authed = !!S.db.rev; } // offline: usa la copia locale
-  if (S.authed) start(); else render();
+  start();
   setInterval(pull, 12000);
 })();
