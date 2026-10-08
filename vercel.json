@@ -1,0 +1,12 @@
+{
+  "regions": ["fra1"],
+  "rewrites": [
+    { "source": "/icon-192.png", "destination": "/api/icon?s=192" },
+    { "source": "/icon-512.png", "destination": "/api/icon?s=512" },
+    { "source": "/icon-maskable-512.png", "destination": "/api/icon?s=512&m=1" }
+  ],
+  "headers": [
+    { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+    { "source": "/(|app1.js|app2.js)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+  ]
+}
