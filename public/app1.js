@@ -372,4 +372,3 @@ window.addEventListener('popstate', () => {
   else S.view = LS.get('view', 'items');
   render(); window.scrollTo(0, 0);
 });
-
