@@ -42,6 +42,7 @@ const blobStore = {
       return { data: JSON.parse(await new Response(r.stream).text()), etag: r.blob.etag };
     }
     let h;
+    countOp('simple');
     try { h = await head(pathname); } catch (e) { if (/not.?found/i.test(String(e.message)) || e.name === 'BlobNotFoundError') return null; throw e; }
     const etag = h.etag;
     const want = String(etag).replace(/^W\//, '').replace(/"/g, '');
@@ -101,6 +102,29 @@ const GRACE_DAYS = 14; // dopo l'eliminazione definitiva i file restano ancora 1
 const KEEP_BACKUPS = 60;
 const day = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 
+// ---------- Contatore operazioni (piano gratuito Vercel Blob: 2.000 scritture e 10.000 letture al mese) ----------
+// Le operazioni fatte senza salvare (letture, permessi di caricamento) si accumulano qui e vengono
+// registrate nel database al primo salvataggio successivo.
+const pending = { adv: 0, simple: 0, uploads: 0 };
+export function countOp(kind, n = 1) { pending[kind] = (pending[kind] || 0) + n; }
+const month = (t = Date.now()) => new Date(t).toISOString().slice(0, 7);
+function applyUsage(db, extraAdv, now) {
+  const m = month(now);
+  if (!db.usage || db.usage.month !== m) db.usage = { month: m, adv: 0, simple: 0, uploads: 0, saves: 0 };
+  const snap = { ...pending };
+  db.usage.adv += snap.adv + extraAdv;
+  db.usage.simple += snap.simple;
+  db.usage.uploads += snap.uploads;
+  db.usage.saves += 1;
+  return snap;
+}
+function clearUsage(snap) { for (const k of Object.keys(snap)) pending[k] -= snap[k]; }
+export function liveUsage(db) {
+  const m = month();
+  const u = db.usage && db.usage.month === m ? db.usage : { month: m, adv: 0, simple: 0, uploads: 0, saves: 0 };
+  return { ...u, adv: u.adv + pending.adv, simple: u.simple + pending.simple, uploads: u.uploads + pending.uploads };
+}
+
 let memo = null;
 let memoText = null; // testo esatto dell'ultima versione scritta/letta da questa istanza
 function normalize(db) {
@@ -148,16 +172,20 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
     const { db, etag } = await readDb({ fresh: true });
     const before = structuredClone(db);
     const purge = applyOps(db, ops, by, now);
-    if (await dailyBackup(before)) db.backupDay = day(now);
+    let extra = 2; // copia immutabile + file principale
+    if (await dailyBackup(before)) { db.backupDay = day(now); extra += 2; } // backup + elenco per la pulizia
     db.rev = (db.rev || 0) + 1;
     db.savedAt = now;
+    const snap = applyUsage(db, extra, now);
     try {
       await store.putJson(DB_PATH(), db, { versioned: true, ...(etag ? { ifMatch: etag } : { noOverwrite: true }) });
+      clearUsage(snap);
       memo = db; memoText = JSON.stringify(db);
       if (purge.length) await store.del(purge).catch((e) => console.error('del', e));
       return db;
     } catch (e) {
       if (!(e instanceof Conflict)) throw e;
+      countOp('adv', 2); // anche un tentativo rifiutato consuma le scritture
       await new Promise((r) => setTimeout(r, Math.min(2000, 80 * (attempt + 1)) * (0.5 + Math.random())));
     }
   }
@@ -179,8 +207,11 @@ export async function replaceDb(data, by) {
     clean.savedAt = Date.now();
     clean.backupDay = db.backupDay;
     clean.restoredBy = by || '';
+    clean.usage = db.usage;
+    const snap = applyUsage(clean, 3, Date.now());
     try {
       await store.putJson(DB_PATH(), clean, { versioned: true, ...(etag ? { ifMatch: etag } : { noOverwrite: true }) });
+      clearUsage(snap);
       memo = clean; memoText = JSON.stringify(clean);
       return clean;
     } catch (e) {
@@ -191,6 +222,7 @@ export async function replaceDb(data, by) {
 }
 
 export async function listBackups() {
+  countOp('adv');
   const all = await store.list(BACKUP_PREFIX());
   return all
     .map((b) => ({ name: b.pathname.slice(BACKUP_PREFIX().length), size: b.size, at: b.uploadedAt }))

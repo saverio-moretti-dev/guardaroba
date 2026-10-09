@@ -302,6 +302,7 @@ function settingsSheet(){
     <div class="sec"><h4>Dati e backup</h4>
       <div class="meter"><span style="width:${Math.min(100, sp.pct)}%"></span></div>
       <div class="small muted" style="margin-top:6px">${sp.usedMB} MB di ${sp.limitMB} MB · ancora circa <b>${sp.left}</b> foto${nTrash ? ` · cestino ${sp.trashMB} MB` : ''}</div>
+      ${usageHtml()}
       <div class="two" style="margin-top:12px"><button class="btn" data-a="trash">Cestino${nTrash ? ` (${nTrash})` : ''}</button><button class="btn" data-a="backups">Backup</button></div>
       <div class="two" style="margin-top:10px"><button class="btn" data-a="export">Esporta</button><button class="btn" data-a="import">Importa</button></div>
     </div>

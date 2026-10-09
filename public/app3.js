@@ -115,3 +115,16 @@ function importBackup(){
   };
   inp.click();
 }
+
+// Operazioni del mese sul piano gratuito (si azzera il 1° del mese)
+const OPS_LIMIT = {adv: 2000, simple: 10000};
+function usageHtml(){
+  const u = (S.db && S.db.usage) || {adv:0, simple:0, uploads:0, saves:0};
+  const row = (label, n, max) => {
+    const pct = Math.min(100, n / max * 100);
+    return `<div class="small muted" style="margin-top:12px">${label}: <b>${n.toLocaleString('it-IT')}</b> di ${max.toLocaleString('it-IT')}${pct >= 80 ? ' <span class="err">quasi al limite</span>' : ''}</div><div class="meter" style="margin-top:4px"><span style="width:${pct}%${pct >= 80 ? ';background:var(--bad)' : ''}"></span></div>`;
+  };
+  return row('Scritture questo mese', u.adv || 0, OPS_LIMIT.adv)
+    + row('Letture questo mese', u.simple || 0, OPS_LIMIT.simple)
+    + `<div class="small muted" style="margin-top:6px">${u.uploads || 0} foto caricate · ${u.saves || 0} salvataggi · si azzera il 1° del mese (stima)</div>`;
+}

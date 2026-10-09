@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { generateClientTokenFromReadWriteToken } from '@vercel/blob/client';
-import { guard } from './_lib.js';
+import { guard, countOp } from './_lib.js';
 
 // Rilascia un permesso di caricamento valido 15 minuti per UNA foto: il telefono la invia
 // direttamente all'archivio, così l'originale arriva intatto e senza limiti di dimensione delle funzioni.
@@ -29,6 +29,7 @@ export default async function handler(req, res) {
       cacheControlMaxAge: 31536000,
       validUntil: Date.now() + 15 * 60 * 1000,
     });
+    countOp('adv'); countOp('uploads');
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
       pathname,
