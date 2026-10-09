@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { get, put, del, list, BlobPreconditionFailedError } from '@vercel/blob';
+import { get, head, put, del, list, BlobPreconditionFailedError } from '@vercel/blob';
 
 const secret = () => process.env.APP_CODE || 'x';
 const hmac = (s) => crypto.createHmac('sha256', secret()).update(s).digest('hex');
@@ -32,14 +32,39 @@ export function codeOk(code) {
 class Conflict extends Error {}
 
 const blobStore = {
+  // Le sovrascritture di un file pubblico possono restare vecchie in lettura anche per minuti.
+  // Per questo: l'etag vero viene da head() (sempre aggiornato) e il contenuto da una copia
+  // immutabile data/<file>.v/<md5>.json, scritta prima di ogni salvataggio (l'etag è l'md5 del contenuto).
   async getJson(pathname, { fresh = false } = {}) {
-    const r = await get(pathname, { access: 'public', useCache: !fresh });
-    if (!r || r.statusCode !== 200) return null;
-    return { data: JSON.parse(await new Response(r.stream).text()), etag: r.blob.etag };
+    if (!fresh) {
+      const r = await get(pathname, { access: 'public' });
+      if (!r || r.statusCode !== 200) return null;
+      return { data: JSON.parse(await new Response(r.stream).text()), etag: r.blob.etag };
+    }
+    let h;
+    try { h = await head(pathname); } catch (e) { if (/not.?found/i.test(String(e.message)) || e.name === 'BlobNotFoundError') return null; throw e; }
+    const etag = h.etag;
+    const want = String(etag).replace(/^W\//, '').replace(/"/g, '');
+    const md5 = (t) => crypto.createHash('md5').update(t).digest('hex');
+    if (memoText && md5(memoText) === want) return { data: JSON.parse(memoText), etag };
+    const v = await get(`${pathname}.v/${want}.json`, { access: 'public' }).catch(() => null);
+    if (v && v.statusCode === 200) { const t = await new Response(v.stream).text(); if (md5(t) === want) return { data: JSON.parse(t), etag }; }
+    const r = await get(pathname, { access: 'public' });
+    const t = r && r.statusCode === 200 ? await new Response(r.stream).text() : null;
+    if (t && md5(t) === want) return { data: JSON.parse(t), etag };
+    // Copia non ancora leggibile: si usa la più recente disponibile, ma si scrive contro l'etag vero.
+    const best = [t, memoText].filter(Boolean).map((x) => JSON.parse(x)).sort((a, b) => (b.rev || 0) - (a.rev || 0))[0];
+    if (!best) throw new Error('dati non leggibili, riprova');
+    return { data: best, etag, stale: true };
   },
-  async putJson(pathname, obj, { ifMatch, noOverwrite, cacheMaxAge = 60 } = {}) {
+  async putJson(pathname, obj, { ifMatch, noOverwrite, cacheMaxAge = 60, versioned = false } = {}) {
+    const text = JSON.stringify(obj);
+    if (versioned) {
+      const md5 = crypto.createHash('md5').update(text).digest('hex');
+      await put(`${pathname}.v/${md5}.json`, text, { access: 'public', addRandomSuffix: false, contentType: 'application/json', cacheControlMaxAge: 31536000, allowOverwrite: true });
+    }
     try {
-      await put(pathname, JSON.stringify(obj), {
+      await put(pathname, text, {
         access: 'public',
         addRandomSuffix: false,
         contentType: 'application/json',
@@ -64,7 +89,7 @@ const blobStore = {
   },
 };
 let store = blobStore;
-export const setStore = (s) => { store = s; memo = null; };
+export const setStore = (s) => { store = s; memo = null; memoText = null; };
 export { Conflict };
 
 // ---------- Percorsi (non indovinabili: derivati dal codice) ----------
@@ -77,6 +102,7 @@ const KEEP_BACKUPS = 60;
 const day = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 
 let memo = null;
+let memoText = null; // testo esatto dell'ultima versione scritta/letta da questa istanza
 function normalize(db) {
   db.items ||= {};
   db.settings ||= {};
@@ -126,8 +152,8 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
     db.rev = (db.rev || 0) + 1;
     db.savedAt = now;
     try {
-      await store.putJson(DB_PATH(), db, etag ? { ifMatch: etag } : { noOverwrite: true });
-      memo = db;
+      await store.putJson(DB_PATH(), db, { versioned: true, ...(etag ? { ifMatch: etag } : { noOverwrite: true }) });
+      memo = db; memoText = JSON.stringify(db);
       if (purge.length) await store.del(purge).catch((e) => console.error('del', e));
       return db;
     } catch (e) {
@@ -154,8 +180,8 @@ export async function replaceDb(data, by) {
     clean.backupDay = db.backupDay;
     clean.restoredBy = by || '';
     try {
-      await store.putJson(DB_PATH(), clean, etag ? { ifMatch: etag } : { noOverwrite: true });
-      memo = clean;
+      await store.putJson(DB_PATH(), clean, { versioned: true, ...(etag ? { ifMatch: etag } : { noOverwrite: true }) });
+      memo = clean; memoText = JSON.stringify(clean);
       return clean;
     } catch (e) {
       if (!(e instanceof Conflict)) throw e;

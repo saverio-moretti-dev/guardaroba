@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   try {
     if (req.method === 'GET') {
-      const { db } = await readDb();
+      const { db } = await readDb({ fresh: true });
       return res.status(200).json(db);
     }
     if (req.method === 'POST') {

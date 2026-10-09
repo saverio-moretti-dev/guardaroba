@@ -471,5 +471,5 @@ async function start(){
   applyTheme();
   S.authed = true;
   start();
-  setInterval(pull, 12000);
+  setInterval(pull, 20000);
 })();
