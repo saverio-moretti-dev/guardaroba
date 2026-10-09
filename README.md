@@ -11,10 +11,13 @@ Gestionale condiviso (PWA) per preparare e tracciare le vendite su Vinted.
 ## Stack
 - Frontend statico in `public/` (HTML + JS vanilla, service worker con Web Share Target).
 - Funzioni Vercel in `api/` (Node, ESM).
-- Dati e foto su Vercel Blob (un file JSON con scritture condizionate + foto JPEG compresse).
+- Dati e foto su Vercel Blob (un file JSON con scritture condizionate + foto originali, senza perdita a qualità 100).
+
+## Deploy
+- Ogni push su `main` va online da solo su (indirizzo privato) (progetto Vercel collegato al repository).
 
 ## Variabili d'ambiente (Vercel)
-- `APP_CODE` — codice di accesso condiviso.
+- `APP_CODE` — non è più un codice d'accesso, ma serve a calcolare il percorso del database: non cambiarlo.
 - `BLOB_READ_WRITE_TOKEN` — creato collegando lo store Blob al progetto.
 
 ## Limiti del piano gratuito Vercel Blob
