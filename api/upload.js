@@ -40,9 +40,7 @@ export default async function handler(req, res) {
         'x-vercel-blob-store-id': storeId,
         'x-vercel-blob-access': 'public',
         'x-content-type': contentType,
-        'x-add-random-suffix': '0',
-        'x-allow-overwrite': '0',
-        'x-cache-control-max-age': '31536000',
+        // Nessun altro header: il browser li blocca (CORS). Suffisso, sovrascrittura e cache sono già fissati nel permesso.
       },
     });
   } catch (e) {
