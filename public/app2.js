@@ -31,7 +31,7 @@ function topBar(title){
 function thumbsHtml(photos, uploads, mode, id){
   const ph = photos.map((p, i) => `<div class="thumb"><img loading="lazy" src="${esc(p.url)}" alt=""><span class="n">${i+1}</span>
     <div class="tools"><button data-ph="first" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Metti come copertina">★</button><button data-ph="l" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Sposta a sinistra">‹</button><button data-ph="r" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Sposta a destra">›</button><button data-ph="x" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Elimina" style="color:var(--bad)">✕</button></div></div>`).join('');
-  const up = uploads.map(u => `<div class="thumb"><img src="${u.thumb}" alt=""><div class="st">${u.status==='errore' ? '⚠︎ errore' : '<span class="spin"></span>'}</div></div>`).join('');
+  const up = uploads.map(u => `<div class="thumb"><img src="${u.thumb}" alt=""><div class="st" data-up="${u.key}">${u.status==='errore' ? '⚠︎ riprovo…' : u.status==='su' ? Math.round((u.progress||0)*100) + '%' : 'in coda'}</div></div>`).join('');
   return ph + up;
 }
 
@@ -51,7 +51,7 @@ function viewFoto(){
         <button class="btn soft big" data-act="gal">${I.gal}Galleria</button>
       </div>
       ${n || ups.length ? `<div class="thumbs">${thumbsHtml(f.photos, ups, 'folder')}</div>` : ''}
-      ${errs ? `<button class="btn block" data-act="retry">Riprova caricamento</button>` : ''}
+      ${errs ? `<button class="btn block" data-act="retry">Riprova ora</button>` : ''}
       <button class="btn primary block big" data-act="close" ${!n || busy ? 'disabled' : ''}>${busy ? 'Caricamento…' : 'Salva articolo →'}</button>
     </div>
     ${recentStrip()}
@@ -254,8 +254,9 @@ function helpSheet(){
     ${Q('Spunte di stato', 'Da creare → Bozza → Pubblicata → Venduta. Toccale nella scheda per cambiare stato.')}
     ${Q('Redrip', 'Si usa dal computer in Chrome sul tuo guardaroba Vinted. Imposta il link del profilo in ⚙︎.')}
     ${Q('Installare l\'app', 'Android: Chrome → ⋮ → Installa app. iPhone: Safari → Condividi → Aggiungi a Home.')}
-    ${Q('Attivazione', 'In ⚙︎ Impostazioni inserisci il codice una volta su ogni telefono o computer: resta attivo.')}
-    ${Q('In due', 'Attivate entrambi con lo stesso codice. Le modifiche dell\'altro arrivano in meno di un minuto.')}
+    ${Q('Qualità foto', 'A 100 la foto resta identica all\'originale del telefono. Sotto 100 viene ricompressa alla stessa risoluzione per occupare meno spazio.')}
+    ${Q('Sicurezza dei dati', 'Ogni foto resta salvata sul telefono finché non è online, anche se chiudi l\'app. Articoli e foto eliminati restano nel cestino 30 giorni. Anche dopo l\'eliminazione definitiva le foto restano recuperabili altri 14 giorni. Ogni giorno viene fatto un backup automatico (ultimi 60 giorni) e puoi esportare tutto in un file.')}
+    ${Q('In due', 'Aprite lo stesso link: le modifiche dell\'altro arrivano in meno di un minuto.')}
     <button class="btn primary block" style="margin-top:14px" data-close>OK</button>`).addEventListener('click', e => { if (e.target.closest('[data-close]')) e.currentTarget.remove(); });
 }
 function applyTheme(){
@@ -271,20 +272,16 @@ async function activate(code, name){
   if (!r.ok) throw new Error('Codice errato');
   if (name){ S.me = name; LS.set('me', name); }
   S.authed = true;
-  await pull(); flush(); drainInbox();
+  await pull(); flush(); restorePending(); drainInbox();
 }
 function settingsSheet(){
   const st = S.db.settings || {};
-  const nPhotos = items().reduce((s,i) => s + (i.photos||[]).length, 0) + (S.folder ? S.folder.photos.length : 0);
-  const mb = Math.round(nPhotos * 0.35);
-  const local = {theme: LS.get('theme','auto'), photoMax: LS.get('photoMax',1600), parcel: st.defaultParcel || ''};
+  const sp = storageStats();
+  const local = {theme: LS.get('theme','auto'), parcel: st.defaultParcel || ''};
+  const q0 = photoQuality();
+  const nTrash = Object.keys((S.db.trash || {}).items || {}).length + ((S.db.trash || {}).photos || []).length;
   const opt = (key, list, cur) => `<div class="chips">${list.map(([v,l]) => `<button type="button" class="chip ${String(cur)===String(v)?'on':''}" data-sopt="${key}" data-v="${v}">${l}</button>`).join('')}</div>`;
   const s = sheet(`<h3>Impostazioni</h3>
-    <div class="sec"><h4>Attivazione</h4>
-      ${S.authed
-        ? `<div class="row"><span class="grow">Attiva ✓</span><button class="btn" data-a="logout" style="min-height:40px">Disattiva</button></div>`
-        : `<div class="two"><input class="t" id="s_code" placeholder="Codice" autocapitalize="off" autocorrect="off" autocomplete="off"><button class="btn primary" data-a="activate">Attiva</button></div><div id="s_err" class="err" style="margin-top:6px"></div>`}
-    </div>
     <div class="sec"><h4>Tu</h4>
       <input class="t" id="s_me" placeholder="Il tuo nome" value="${esc(S.me)}">
     </div>
@@ -296,15 +293,26 @@ function settingsSheet(){
     </div>
     <div class="sec"><h4>App</h4>
       <div class="field"><label class="f">Tema</label>${opt('theme', [['auto','Automatico'],['light','Chiaro'],['dark','Scuro']], local.theme)}</div>
-      <div class="field"><label class="f">Qualità foto</label>${opt('photoMax', [[1200,'Leggera'],[1600,'Normale'],[2048,'Alta']], local.photoMax)}</div>
+      <div class="field"><label class="f" for="s_qn">Qualità foto (0–100)</label>
+        <div class="qbox"><input type="range" id="s_q" min="0" max="100" step="1" value="${q0}"><input class="t" type="number" id="s_qn" min="0" max="100" step="1" inputmode="numeric" value="${q0}"></div>
+        <div class="small muted" id="s_qh">${qualityHint(q0)}</div></div>
       ${S.installEvt ? `<button class="btn block" data-a="install" style="margin-top:12px">Installa app</button>` : ''}
-      <div class="small muted" style="margin-top:12px">Spazio foto: ~${mb} / 1000 MB</div>
+    </div>
+    <div class="sec"><h4>Dati e backup</h4>
+      <div class="meter"><span style="width:${Math.min(100, sp.pct)}%"></span></div>
+      <div class="small muted" style="margin-top:6px">${sp.usedMB} MB di ${sp.limitMB} MB · ancora circa <b>${sp.left}</b> foto${nTrash ? ` · cestino ${sp.trashMB} MB` : ''}</div>
+      <div class="two" style="margin-top:12px"><button class="btn" data-a="trash">Cestino${nTrash ? ` (${nTrash})` : ''}</button><button class="btn" data-a="backups">Backup</button></div>
+      <div class="two" style="margin-top:10px"><button class="btn" data-a="export">Esporta</button><button class="btn" data-a="import">Importa</button></div>
     </div>
     <button class="btn primary block" data-a="save" style="margin-top:18px">Salva</button>`);
+  const qr = $('#s_q', s), qn = $('#s_qn', s), qh = $('#s_qh', s);
+  const setQ = (v) => { v = Math.max(0, Math.min(100, Math.round(+v || 0))); qr.value = v; qn.value = v; qh.textContent = qualityHint(v); return v; };
+  qr.addEventListener('input', () => setQ(qr.value));
+  qn.addEventListener('change', () => setQ(qn.value));
   s.addEventListener('click', async e => {
     const c = e.target.closest('[data-sopt]');
     if (c){
-      local[c.dataset.sopt] = c.dataset.sopt === 'photoMax' ? +c.dataset.v : c.dataset.v;
+      local[c.dataset.sopt] = c.dataset.v;
       c.parentElement.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
       if (c.dataset.sopt === 'theme'){ LS.set('theme', local.theme); applyTheme(); }
       return;
@@ -319,11 +327,15 @@ function settingsSheet(){
       }catch(err){ $('#s_err', s).textContent = err.message; a.disabled = false; }
     } else if (act === 'logout'){
       await fetch('/api/logout', {method:'POST'}); S.authed = false; s.remove(); render(); toast('Disattivata su questo dispositivo');
+    } else if (act === 'trash'){ s.remove(); trashSheet();
+    } else if (act === 'backups'){ s.remove(); backupsSheet();
+    } else if (act === 'export'){ exportBackup();
+    } else if (act === 'import'){ importBackup();
     } else if (act === 'install'){
       S.installEvt.prompt(); S.installEvt = null; a.remove();
     } else if (act === 'save'){
       const me = $('#s_me', s).value.trim(); if (me){ S.me = me; LS.set('me', me); }
-      LS.set('photoMax', local.photoMax);
+      LS.set('photoQ', setQ(qn.value));
       const data = {};
       const prof = $('#s_prof', s).value.trim(); if (prof !== (st.vintedProfile || '')) data.vintedProfile = prof;
       if (local.parcel !== (st.defaultParcel || '')) data.defaultParcel = local.parcel;
@@ -437,13 +449,18 @@ function refreshKeep(force){ if (force && document.activeElement) document.activ
 });
 
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; if (S.view === 'foto') refresh(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden){ pull(); drainInbox(); } else flush(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden){ pull(); drainInbox(); retryUploads(); flush(); } else flush(); });
+window.addEventListener('online', () => { toast('Di nuovo online'); retryUploads(); flush(); });
 window.addEventListener('pagehide', () => { if (S.ops.length) flush(); });
 window.addEventListener('beforeunload', (e) => { if (S.uploads.some(u => u.status !== 'errore')){ e.preventDefault(); e.returnValue = ''; } });
 
 // ====================== Avvio ======================
 async function start(){
+  const sending = LS.get('opsSending', []);
+  if (sending.length){ S.ops = sending.concat(S.ops); LS.set('opsSending', []); persistOps(); }
+  for (const op of S.ops) applyLocal(op);
   render();
+  if (S.authed){ flush(); restorePending(); }
   pull(); drainInbox();
   const p = new URLSearchParams(location.search);
   if (p.has('shared')) history.replaceState(null, '', '/');
@@ -451,8 +468,7 @@ async function start(){
 (async function boot(){
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
   applyTheme();
-  try{ const r = await fetch('/api/me', {credentials:'same-origin'}); S.authed = (await r.json()).ok; }
-  catch{ S.authed = !!S.db.rev; } // offline: usa la copia locale
+  S.authed = true;
   start();
   setInterval(pull, 12000);
 })();

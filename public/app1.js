@@ -23,10 +23,10 @@ const S = {
   q: '',
   folder: LS.get('folder', null), // {id, photos:[{url}]}
   uploads: [], // {key, thumb, status, blob, target, inboxKey}
-  ops: [], saving: false, saveErr: false,
+  ops: LS.get('opsQueue', []), saving: false, saveErr: false, // le modifiche non ancora salvate sopravvivono a chiusure e riavvii
   copied: {}, // itemId -> Set(campo)
   installEvt: null,
-  authed: false,
+  authed: true,
 };
 const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -74,24 +74,37 @@ let flushT = null;
 function queue(op){
   if (op.op === 'upsert'){
     const prev = S.ops.find(o => o.op === 'upsert' && o.id === op.id);
-    if (prev){ Object.assign(prev.data, op.data); applyLocal(op); return scheduleFlush(); }
+    if (prev){ Object.assign(prev.data, op.data); applyLocal(op); persistOps(); return scheduleFlush(); }
     op = {op:'upsert', id:op.id, data:{...op.data}};
   }
   S.ops.push(op);
   // Applica subito in locale per una UI immediata
   applyLocal(op);
+  persistOps();
   scheduleFlush();
 }
+const persistOps = () => LS.set('opsQueue', S.ops);
+// Anteprima locale delle modifiche (il server resta l'unica fonte di verità e la sua risposta sostituisce questa)
 function applyLocal(op){
-  const db = S.db; db.items ||= {};
-  if (op.op === 'delete'){ delete db.items[op.id]; return; }
+  const db = S.db; db.items ||= {}; db.trash ||= {items:{}, photos:[]}; db.trash.items ||= {}; db.trash.photos ||= [];
   if (op.op === 'settings'){ Object.assign(db.settings ||= {}, op.data); return; }
+  if (op.op === 'delete'){ const it = db.items[op.id]; if (it){ db.trash.items[op.id] = {...it, deletedAt:Date.now()}; delete db.items[op.id]; } return; }
+  if (op.op === 'restore'){ const it = db.trash.items[op.id]; if (it && !db.items[op.id]){ db.items[op.id] = it; delete db.trash.items[op.id]; } return; }
+  if (op.op === 'purge'){ for (const id of op.ids || []) delete db.trash.items[id]; db.trash.photos = db.trash.photos.filter(p => !(op.urls || []).includes(p.url)); return; }
+  if (op.op === 'emptyTrash'){ db.trash = {items:{}, photos:[]}; return; }
+  if (op.op === 'trashPhotos'){ for (const p of op.photos || []) db.trash.photos.push({...p, at:Date.now()}); return; }
+  if (op.op === 'restorePhoto'){ const i = db.trash.photos.findIndex(p => p.url === op.url); if (i >= 0){ const p = db.trash.photos[i]; const it = db.items[p.itemId]; if (it){ db.trash.photos.splice(i,1); it.photos.push({url:p.url, size:p.size}); } } return; }
   if (!op.id) return;
   let it = db.items[op.id];
   if (!it){ if (op.op !== 'upsert' && op.op !== 'addPhotos') return; it = db.items[op.id] = {id:op.id, createdAt:Date.now(), createdBy:S.me, status:'foto', photos:[]}; }
   if (op.op === 'upsert') Object.assign(it, op.data);
-  if (op.op === 'addPhotos') for (const p of op.photos) if (!it.photos.some(x=>x.url===p.url)) it.photos.push({url:p.url});
-  if (op.op === 'setPhotos') it.photos = op.photos.map(p=>({url:p.url}));
+  if (op.op === 'addPhotos') for (const p of op.photos) if (!it.photos.some(x=>x.url===p.url)) it.photos.push({url:p.url, size:p.size});
+  if (op.op === 'setPhotos'){
+    const keep = new Set(op.photos.map(p => p.url));
+    for (const p of it.photos) if (!keep.has(p.url)) db.trash.photos.push({...p, itemId:it.id, at:Date.now()});
+    const byUrl = new Map(it.photos.map(p => [p.url, p]));
+    it.photos = op.photos.map(p => byUrl.get(p.url)).filter(Boolean);
+  }
   it.updatedAt = Date.now();
 }
 function scheduleFlush(ms=700){ clearTimeout(flushT); flushT = setTimeout(flush, ms); updateSaveBar(); }
@@ -99,82 +112,167 @@ async function flush(){
   if (S.saving || !S.ops.length) return;
   S.saving = true; updateSaveBar();
   const ops = S.ops; S.ops = [];
+  LS.set('opsSending', ops); // in volo: se la pagina si chiude ora, al riavvio vengono rimandate (il server ignora i duplicati)
   try{
     const db = await api('/api/db', {method:'POST', keepalive:true, headers:{'content-type':'application/json'}, body:JSON.stringify({ops, by:S.me})});
     S.saveErr = false;
     // Ri-applica eventuali modifiche fatte durante il salvataggio
     for (const op of S.ops) applyOpOn(db, op);
     S.db.rev = -1; setDb(db);
+    LS.set('opsSending', []);
   }catch(e){
-    S.ops = ops.concat(S.ops); S.saveErr = true;
+    S.ops = ops.concat(S.ops); S.saveErr = true; LS.set('opsSending', []);
     if (e.message !== 'auth') setTimeout(flush, 4000);
   }finally{
-    S.saving = false; updateSaveBar();
+    S.saving = false; persistOps(); updateSaveBar();
     if (S.ops.length) scheduleFlush(300);
   }
 }
 function applyOpOn(db, op){ const keep = S.db; S.db = db; applyLocal(op); S.db = keep; }
 
-// ====================== Foto: compressione e caricamento ======================
-async function compress(file){
-  const MAX = LS.get('photoMax', 1600);
-  let src;
-  try{ src = await createImageBitmap(file, {imageOrientation:'from-image'}); }
-  catch{
-    src = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = URL.createObjectURL(file); });
-  }
-  const w = src.width, h = src.height, k = Math.min(1, MAX / Math.max(w, h));
-  const c = document.createElement('canvas'); c.width = Math.round(w*k); c.height = Math.round(h*k);
-  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-  return await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+// ====================== Foto: qualità e caricamento ======================
+// 100 = file originale del telefono, byte per byte, nessuna perdita.
+// Sotto 100 = stessa risoluzione (mai ridotta), ricompressa JPEG da 0.82 (a 0) a 0.98 (a 99).
+// Se la ricompressione non fa risparmiare spazio si usa comunque l'originale.
+const photoQuality = () => { const q = Math.round(+LS.get('photoQ', 100)); return Number.isFinite(q) ? Math.max(0, Math.min(100, q)) : 100; };
+const jpegQ = (q) => 0.82 + 0.16 * (q / 99);
+const IMG_TYPES = ['image/jpeg','image/png','image/webp','image/heic','image/heif','image/avif'];
+function fileType(f){
+  const t = (f.type || '').toLowerCase();
+  if (IMG_TYPES.includes(t)) return t;
+  const ext = ((f.name || '').split('.').pop() || '').toLowerCase();
+  return {jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp', heic:'image/heic', heif:'image/heif', avif:'image/avif'}[ext] || (t ? '' : 'image/jpeg');
 }
+async function prepareFile(file){
+  const type = fileType(file);
+  const q = photoQuality();
+  if (q >= 100 || !/^image\/(jpeg|png|webp)$/.test(type)) return {blob:file, type};
+  try{
+    const bmp = await createImageBitmap(file, {imageOrientation:'from-image'});
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    c.getContext('2d').drawImage(bmp, 0, 0); if (bmp.close) bmp.close();
+    const out = await new Promise(r => c.toBlob(r, 'image/jpeg', jpegQ(q)));
+    c.width = c.height = 0;
+    if (out && out.size < file.size) return {blob:out, type:'image/jpeg'};
+  }catch(e){ console.warn('ricompressione non riuscita, uso l\'originale', e); }
+  return {blob:file, type};
+}
+function putWithProgress(endpoint, headers, body, onProgress){
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', endpoint);
+    for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, v);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => {
+      if (x.status >= 200 && x.status < 300){ try{ return res(JSON.parse(x.responseText)); }catch{ return rej(new Error('risposta non valida')); } }
+      rej(new Error(`caricamento rifiutato (${x.status})`));
+    };
+    x.onerror = () => rej(new Error('rete'));
+    x.ontimeout = () => rej(new Error('tempo scaduto'));
+    x.timeout = 15 * 60 * 1000;
+    x.send(body);
+  });
+}
+
+// Coda di caricamento persistente: ogni foto resta salvata sul telefono finché non è al sicuro online.
+const PEND = 'pending-uploads';
+const pendMeta = () => LS.get('pendingMeta', []);
+const setPendMeta = (m) => LS.set('pendingMeta', m);
+async function savePending(u){
+  try{
+    const c = await caches.open(PEND);
+    await c.put('/pending/' + u.key, new Response(u.file, {headers:{'content-type': u.file.type || 'application/octet-stream', 'x-name': encodeURIComponent(u.file.name || 'foto')}}));
+    setPendMeta([...pendMeta().filter(m => m.key !== u.key), {key:u.key, target:u.target, seq:u.seq}]);
+    return true;
+  }catch(e){ console.warn('coda non salvata', e); return false; }
+}
+async function dropPending(key){
+  setPendMeta(pendMeta().filter(m => m.key !== key));
+  try{ await (await caches.open(PEND)).delete('/pending/' + key); }catch{}
+}
+async function restorePending(){
+  if (!('caches' in window)) return;
+  const metas = pendMeta(); if (!metas.length) return;
+  try{
+    const c = await caches.open(PEND);
+    const known = new Set(S.uploads.map(u => u.key));
+    let n = 0;
+    for (const m of metas){
+      if (known.has(m.key)) continue;
+      const r = await c.match('/pending/' + m.key);
+      if (!r){ setPendMeta(pendMeta().filter(x => x.key !== m.key)); continue; }
+      const blob = await r.blob();
+      const file = new File([blob], decodeURIComponent(r.headers.get('x-name') || 'foto'), {type: blob.type});
+      S.uploads.push({key:m.key, seq:m.seq, thumb:URL.createObjectURL(file), status:'attesa', file, target:m.target, tries:0});
+      n++;
+    }
+    if (n){ toast(`Riprendo ${n} foto non ancora caricate`); refresh(); pumpUploads(); }
+  }catch(e){ console.warn(e); }
+}
+
 function ensureFolder(){
-  if (!S.folder){ S.folder = {id:newId(), photos:[], createdAt:Date.now()}; LS.set('folder', S.folder); }
+  if (!S.folder){ S.folder = {id:newId(), photos:[], createdAt:Date.now(), seq:0}; LS.set('folder', S.folder); }
   return S.folder;
 }
-function addFiles(files, target, inboxKeys){
+async function addFiles(files, target, inboxKeys){
   // target: {kind:'folder'} oppure {kind:'item', id}
   if (!S.authed){ needActivation(); return; }
   const list = Array.from(files || []);
+  let seqBase = Date.now() * 100;
+  const added = [];
   list.forEach((f, i) => {
-    const folderId = target.kind === 'folder' ? ensureFolder().id : null;
-    S.uploads.push({key:newId()+i, thumb:URL.createObjectURL(f), status:'attesa', file:f,
-      target: target.kind === 'folder' ? {kind:'folder', id:folderId} : target,
-      inboxKey: inboxKeys ? inboxKeys[i] : null});
+    const t = target.kind === 'folder' ? {kind:'folder', id:ensureFolder().id} : target;
+    const u = {key:newId() + i, seq:seqBase + i, thumb:URL.createObjectURL(f), status:'attesa', file:f, target:t, tries:0};
+    S.uploads.push(u); added.push(u);
   });
-  refresh(); pumpUploads();
-}
-let pumping = 0;
-async function pumpUploads(){
-  while (pumping < 2){
-    const u = S.uploads.find(x => x.status === 'attesa');
-    if (!u) break;
-    pumping++; u.status = 'su'; refresh();
-    (async () => {
-      try{
-        const blob = await compress(u.file);
-        const id = u.target.id;
-        const r = await fetch(`/api/photo?item=${id}`, {method:'POST', body:blob, headers:{'content-type':'image/jpeg'}, credentials:'same-origin'});
-        if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'errore');
-        const {url} = await r.json();
-        u.status = 'ok'; u.url = url;
-        if (u.target.kind === 'folder' && S.folder && S.folder.id === id){
-          S.folder.photos.push({url, key:u.key}); LS.set('folder', S.folder);
-        } else if (u.target.kind === 'item'){
-          queue({op:'addPhotos', id, photos:[{url}]});
-        }
-        if (u.inboxKey){ try{ (await caches.open('share-inbox')).delete(u.inboxKey); }catch{} }
-      }catch(e){
-        u.status = 'errore'; u.err = e.message;
-      }finally{
-        pumping--;
-        if (u.status === 'ok'){ URL.revokeObjectURL(u.thumb); S.uploads = S.uploads.filter(x => x !== u); }
-        refresh(); pumpUploads();
-      }
-    })();
+  refresh();
+  for (let i = 0; i < added.length; i++){
+    await savePending(added[i]);
+    if (inboxKeys && inboxKeys[i]){ try{ (await caches.open('share-inbox')).delete(inboxKeys[i]); }catch{} }
   }
+  pumpUploads();
 }
-function retryUploads(){ S.uploads.forEach(u => { if (u.status === 'errore') u.status = 'attesa'; }); pumpUploads(); }
+let pumping = false;
+async function pumpUploads(){
+  if (pumping || !S.authed) return;
+  pumping = true;
+  try{
+    for (;;){
+      const u = S.uploads.find(x => x.status === 'attesa');
+      if (!u) break;
+      u.status = 'su'; u.progress = 0; refresh();
+      try{
+        const {blob, type} = await prepareFile(u.file);
+        if (!type) throw new Error('formato non supportato');
+        const id = u.target.id;
+        const ticket = await api('/api/upload', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({item:id, contentType:type, size:blob.size})});
+        const res = await putWithProgress(ticket.endpoint, ticket.headers, blob, (p) => {
+          u.progress = p; const el = document.querySelector(`[data-up="${u.key}"]`); if (el) el.textContent = Math.round(p * 100) + '%';
+        });
+        const photo = {url:res.url, size:blob.size};
+        if (u.target.kind === 'folder' && S.folder && S.folder.id === id){
+          S.folder.photos.push({...photo, seq:u.seq});
+          S.folder.photos.sort((a, b) => (a.seq || 0) - (b.seq || 0));
+          LS.set('folder', S.folder);
+        } else if (u.target.kind === 'folder'){
+          // la cartella è già stata salvata come articolo: la foto va all'articolo
+          queue({op:'addPhotos', id, photos:[photo]});
+        } else {
+          queue({op:'addPhotos', id, photos:[photo]});
+        }
+        u.status = 'ok';
+        await dropPending(u.key);
+      }catch(e){
+        u.status = 'errore'; u.err = e.message; u.tries = (u.tries || 0) + 1;
+        if (e.message === 'auth') break;
+        if (u.tries < 6) setTimeout(() => { if (u.status === 'errore'){ u.status = 'attesa'; pumpUploads(); } }, Math.min(30000, 1500 * 2 ** u.tries));
+      }
+      if (u.status === 'ok'){ URL.revokeObjectURL(u.thumb); S.uploads = S.uploads.filter(x => x !== u); }
+      refresh();
+    }
+  }finally{ pumping = false; }
+}
+function retryUploads(){ S.uploads.forEach(u => { if (u.status === 'errore'){ u.status = 'attesa'; u.tries = 0; } }); pumpUploads(); }
 const pendingFor = (id) => S.uploads.filter(u => u.target.id === id);
 
 // Foto condivise da Google Foto (arrivano tramite il service worker)
@@ -183,13 +281,11 @@ async function drainInbox(){
   try{
     const c = await caches.open('share-inbox');
     const keys = await c.keys();
-    const already = new Set(S.uploads.map(u => u.inboxKey).filter(Boolean));
-    const todo = keys.filter(k => !already.has(k.url));
-    if (!todo.length) return;
+    if (!keys.length) return;
     const files = [], ks = [];
-    for (const k of todo){ const r = await c.match(k); if (r){ files.push(await r.blob()); ks.push(k.url); } }
+    for (const k of keys){ const r = await c.match(k); if (r){ const b = await r.blob(); files.push(new File([b], decodeURIComponent(r.headers.get('x-name') || 'foto.jpg'), {type:b.type})); ks.push(k.url); } }
     if (files.length){
-      addFiles(files, {kind:'folder'}, ks);
+      await addFiles(files, {kind:'folder'}, ks);
       go('foto');
       toast(`${files.length} foto ricevute`);
     }
@@ -202,7 +298,7 @@ function closeFolder(){
   if (!f || !f.photos.length) return;
   const parcel = (S.db.settings || {}).defaultParcel;
   queue({op:'upsert', id:f.id, data:{status:'compilare', owner:S.me, ...(parcel ? {parcel} : {})}});
-  queue({op:'addPhotos', id:f.id, photos:f.photos.map(p => ({url:p.url}))});
+  queue({op:'addPhotos', id:f.id, photos:f.photos.map(p => ({url:p.url, size:p.size}))});
   S.folder = null; LS.set('folder', null);
   toast('Articolo salvato. Contatore azzerato.');
   openEdit(f.id);
@@ -215,38 +311,37 @@ function folderMove(i, d){ S.folder.photos = movePhoto(S.folder.photos, i, d); L
 function folderFirst(i){ const a = S.folder.photos.slice(); const [x] = a.splice(i,1); a.unshift(x); S.folder.photos = a; LS.set('folder', S.folder); refresh(); }
 async function folderDel(i){
   const [p] = S.folder.photos.splice(i, 1); LS.set('folder', S.folder); refresh();
-  queue({op:'deletePhotos', urls:[p.url]});
+  queue({op:'trashPhotos', id:S.folder.id, photos:[{url:p.url, size:p.size}]});
+  toast('Foto nel cestino');
 }
 async function discardFolder(){
   if (!S.folder) return;
   if (!(await ask('Scartare questa cartella e le sue foto?', 'Scarta'))) return;
-  const urls = S.folder.photos.map(p => p.url);
+  const photos = S.folder.photos.map(p => ({url:p.url, size:p.size}));
+  const id = S.folder.id;
   S.folder = null; LS.set('folder', null);
-  if (urls.length) queue({op:'deletePhotos', urls});
+  if (photos.length) queue({op:'trashPhotos', id, photos});
   refresh();
 }
 function itemMove(id, i, d){ const it = S.db.items[id]; queue({op:'setPhotos', id, photos:movePhoto(it.photos, i, d)}); refresh(); }
 function itemFirst(id, i){ const a = S.db.items[id].photos.slice(); const [x] = a.splice(i,1); a.unshift(x); queue({op:'setPhotos', id, photos:a}); refresh(); }
 async function itemDelPhoto(id, i){
   const it = S.db.items[id]; const p = it.photos[i];
-  if (!(await ask('Eliminare questa foto?', 'Elimina'))) return;
+  if (!(await ask('Spostare questa foto nel cestino?', 'Sposta'))) return;
   queue({op:'setPhotos', id, photos:it.photos.filter((_,k)=>k!==i)});
-  queue({op:'deletePhotos', urls:[p.url]});
-  refresh();
+  refresh(); toast('Foto nel cestino (recuperabile per 30 giorni)');
 }
 async function deleteItem(id){
   const it = S.db.items[id]; if (!it) return;
-  if (!(await ask('Eliminare definitivamente questo articolo e le sue foto?', 'Elimina'))) return;
-  const urls = (it.photos||[]).map(p => p.url);
+  if (!(await ask('Spostare questo articolo nel cestino? Potrai recuperarlo per 30 giorni.', 'Sposta'))) return;
   queue({op:'delete', id});
-  if (urls.length) queue({op:'deletePhotos', urls});
-  go('items');
+  go('items'); toast('Articolo nel cestino');
 }
 async function freePhotos(id){
   const it = S.db.items[id]; if (!it || !it.photos.length) return;
-  if (!(await ask('Tenere la scheda ma cancellare le foto per liberare spazio?', 'Cancella foto'))) return;
+  if (!(await ask('Tenere la scheda ma eliminare le foto per liberare spazio? Lo spazio si libera tra 14 giorni.', 'Elimina foto'))) return;
   const urls = it.photos.map(p => p.url);
-  queue({op:'setPhotos', id, photos:[]}); queue({op:'deletePhotos', urls});
+  queue({op:'setPhotos', id, photos:[]}); queue({op:'purge', urls});
   refresh();
 }
 function setStatus(id, status, extra={}){
@@ -271,19 +366,30 @@ async function copyText(t){
 
 // Foto → telefono
 const slug = (s) => (String(s||'articolo').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,30) || 'articolo');
+const extOf = (url) => ((url.split('?')[0].split('.').pop() || 'jpg').toLowerCase().replace('jpeg','jpg'));
 async function downloadPhotos(id){
   const it = S.db.items[id]; if (!it || !it.photos.length) return;
   toast(`Scarico ${it.photos.length} foto…`);
   const base = slug(it.title || it.brand);
+  let ok = 0;
   for (let i = 0; i < it.photos.length; i++){
+    const url = it.photos[i].url;
+    const name = `${base}-${String(i+1).padStart(2,'0')}.${extOf(url)}`;
     const a = document.createElement('a');
-    const name = `${base}-${String(i+1).padStart(2,'0')}.jpg`;
-    a.href = `/api/file?url=${encodeURIComponent(it.photos[i].url)}&name=${encodeURIComponent(name)}`;
-    a.download = name; document.body.appendChild(a); a.click(); a.remove();
-    await new Promise(r => setTimeout(r, 700));
+    try{
+      const b = await (await fetch(url)).blob();
+      a.href = URL.createObjectURL(b); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      ok++;
+    }catch{
+      a.href = url + (url.includes('?') ? '&' : '?') + 'download=1'; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); a.remove(); ok++;
+    }
+    await new Promise(r => setTimeout(r, 500));
   }
   markCopied(id, 'foto');
-  toast('Foto salvate in Download: le trovi nel selettore di Vinted');
+  toast(`${ok} foto salvate in Download: le trovi nel selettore di Vinted`);
 }
 async function sharePhotos(id){
   const it = S.db.items[id]; if (!it || !it.photos.length) return;
@@ -292,7 +398,7 @@ async function sharePhotos(id){
     const base = slug(it.title || it.brand);
     const files = await Promise.all(it.photos.map(async (p, i) => {
       const b = await (await fetch(p.url)).blob();
-      return new File([b], `${base}-${String(i+1).padStart(2,'0')}.jpg`, {type:'image/jpeg'});
+      return new File([b], `${base}-${String(i+1).padStart(2,'0')}.${extOf(p.url)}`, {type:b.type || 'image/jpeg'});
     }));
     if (navigator.canShare && navigator.canShare({files})){ await navigator.share({files}); markCopied(id, 'foto'); }
     else { toast('Condivisione non supportata qui: uso il download'); downloadPhotos(id); }

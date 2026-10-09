@@ -1,5 +1,4 @@
-import { del } from '@vercel/blob';
-import { guard, readDb, writeDb, isBlobUrl } from './_lib.js';
+import { guard, readDb, writeDb } from './_lib.js';
 
 export default async function handler(req, res) {
   if (!guard(req, res)) return;
@@ -11,15 +10,9 @@ export default async function handler(req, res) {
     }
     if (req.method === 'POST') {
       const body = req.body || {};
-      const ops = Array.isArray(body.ops) ? body.ops.slice(0, 200) : [];
+      const ops = Array.isArray(body.ops) ? body.ops.slice(0, 500) : [];
       const by = String(body.by || '').slice(0, 40);
-      // Foto da cancellare dallo spazio (del() è gratuito)
-      const toDelete = [];
-      for (const op of ops) {
-        if (op.op === 'deletePhotos') for (const u of op.urls || []) if (isBlobUrl(u)) toDelete.push(u);
-      }
-      const db = await writeDb(ops.filter((o) => o.op !== 'deletePhotos'), by);
-      if (toDelete.length) await del(toDelete).catch((e) => console.error('del', e));
+      const db = await writeDb(ops, by);
       return res.status(200).json(db);
     }
     res.status(405).end();
