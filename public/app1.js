@@ -400,7 +400,11 @@ async function sharePhotos(id){
       const b = await (await fetch(p.url)).blob();
       return new File([b], `${base}-${String(i+1).padStart(2,'0')}.${extOf(p.url)}`, {type:b.type || 'image/jpeg'});
     }));
-    if (navigator.canShare && navigator.canShare({files})){ await navigator.share({files}); markCopied(id, 'foto'); }
+    const text = 'Foto di un capo da vendere su Vinted' + (it.title ? ': ' + it.title : '') + '. Scrivi titolo e descrizione.';
+    if (navigator.canShare && navigator.canShare({files})){
+      await navigator.share(navigator.canShare({files, text}) ? {files, text} : {files});
+      markCopied(id, 'foto');
+    }
     else { toast('Condivisione non supportata qui: uso il download'); downloadPhotos(id); }
   }catch(e){ if (e.name !== 'AbortError') toast('Condivisione non riuscita'); }
 }

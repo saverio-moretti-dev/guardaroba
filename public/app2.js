@@ -156,6 +156,7 @@ function viewEdit(){
       <div class="row"><span class="grow small muted">${it.photos.length} foto${it.createdBy ? ' · di ' + esc(it.createdBy) : ''}</span></div>
       <div class="thumbs">${thumbsHtml(it.photos, ups, 'item', it.id)}</div>
       <div class="two"><button class="btn soft" data-act="cam-item">${I.cam}Scatta</button><button class="btn soft" data-act="gal-item">${I.gal}Galleria</button></div>
+      ${it.photos.length ? `<button class="btn block" data-act="shareph">${I.share}Inoltra tutte le foto (${it.photos.length})</button>` : ''}
     </div>
     <button class="btn primary block big" data-act="copymode" style="margin:14px 0">${I.copy}Copia su Vinted</button>
     <div class="card">
