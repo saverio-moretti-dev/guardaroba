@@ -58,7 +58,7 @@ http.createServer(async (req, res) => {
     if (p === '/__test/setBackupDay') { const r = await L.readDb({ fresh: true }); r.db.backupDay = '2000-01-01'; await L.setStore; files.get([...files.keys()].find((k) => k.startsWith('data/db-'))).body = Buffer.from(JSON.stringify(r.db)); res.writeHead(200); return res.end('ok'); }
 
     // --- caricamento diretto (imita https://vercel.com/api/blob/?pathname=...) ---
-    if (p === '/blobput' && req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'PUT', 'access-control-allow-headers': '*' }); return res.end(); }
+    if (p === '/blobput' && req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'PUT', 'access-control-allow-headers': 'authorization,content-type,x-api-version,x-content-type,x-content-length,x-vercel-blob-access,x-vercel-blob-store-id,x-vercel-blob-team-id,x-if-match' }); return res.end(); } // stessa lista ammessa da Vercel Blob
     if (p === '/blobput' && req.method === 'PUT') {
       const pathname = u.searchParams.get('pathname');
       const body = await readBody(req);
