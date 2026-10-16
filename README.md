@@ -1,36 +1,60 @@
-# Vinted-manager — "Guardaroba"
+# Guardaroba — gestionale per vendere su Vinted
 
-Gestionale condiviso (PWA) per preparare e tracciare le vendite su Vinted.
+App web installabile (PWA) per preparare, tracciare e pubblicare le vendite di abbigliamento usato su Vinted.
+La uso ogni giorno in due, da due telefoni diversi, sullo stesso archivio.
 
-- **Foto**: scatta o condividi da Google Foto → cartella con contatore → "Salva articolo".
-- **Scheda**: brand, categoria, taglia, condizioni, colori, prezzo; titolo e descrizione generati.
-- **Copia su Vinted**: un tocco per campo, foto scaricabili sul telefono.
-- **Stato**: Da creare → Bozza → Pubblicata → Venduta.
-- **Pubblica**: una bozza al giorno.
+*English: a shared PWA to prepare and track second-hand clothing listings. Vanilla JS front end, Node
+serverless functions on Vercel, Vercel Blob storage with conditional writes, an offline queue and tests.*
 
-## Stack
-- Frontend statico in `public/` (HTML + JS vanilla, service worker con Web Share Target).
-- Funzioni Vercel in `api/` (Node, ESM).
-- Dati e foto su Vercel Blob (un file JSON con scritture condizionate + foto originali, senza perdita a qualità 100).
+## Il problema
+Vinted non ha API pubbliche. Preparare un annuncio vuol dire scattare le foto, scegliere marca, taglia,
+condizioni e colori, scrivere titolo e descrizione, poi ricopiare tutto a mano nell'app. Fatto in due e
+su decine di capi, le schede si perdono, si duplicano e nessuno sa a che punto è ciascun articolo.
 
-## Deploy
-- Ogni push su `main` va online da solo su (indirizzo privato) (progetto Vercel collegato al repository).
+## Cosa fa
+- **Foto**: scatto dalla fotocamera o condivisione da Google Foto direttamente nell'app (Web Share Target).
+- **Scheda**: i campi di Vinted (marca, categoria, taglia, condizioni, colori, prezzo, pacco); titolo e
+  descrizione generati dai campi.
+- **Copia su Vinted**: un tocco per copiare ogni campo e scaricare le foto sul telefono.
+- **Stato di ogni capo**: Da creare → Bozza → Pubblicata → Venduta; una bozza al giorno da pubblicare.
+- **Sicurezza dei dati**: cestino di 30 giorni, backup automatico giornaliero (ultimi 60), esporta/importa.
 
-## Variabili d'ambiente (Vercel)
-- `APP_CODE` — non è più un codice d'accesso, ma serve a calcolare il percorso del database: non cambiarlo.
-- `BLOB_READ_WRITE_TOKEN` — creato collegando lo store Blob al progetto.
+## Come è fatta
+| parte | scelta | perché |
+| --- | --- | --- |
+| Frontend | HTML + JavaScript senza framework, service worker | si apre all'istante sul telefono, funziona anche offline |
+| Backend | funzioni serverless Node su Vercel (`api/`) | nessun server da mantenere, costo zero |
+| Dati | un file JSON su Vercel Blob con **scritture condizionate** | due persone salvano insieme senza sovrascriversi |
+| Foto | caricate dal telefono direttamente sull'archivio, con permesso per singola foto | nessun limite di dimensione delle funzioni, originali identici byte per byte |
+| Offline | coda persistente sul telefono | foto e modifiche non si perdono se cade la rete o si chiude l'app |
 
-## Limiti del piano gratuito Vercel Blob
-1 GB, 2.000 scritture/mese. Ogni foto = 1 scrittura, ogni salvataggio scheda = 1 scrittura.
-
-## Foto e sicurezza dei dati
-- Qualità 100 (predefinita): la foto caricata è identica byte per byte all'originale. Sotto 100: stessa risoluzione, ricompressa.
-- Le foto vanno dal telefono direttamente a Vercel Blob (`api/upload.js` rilascia un permesso per singola foto): nessun limite di 4,5 MB.
-- Coda persistente: foto e modifiche restano sul telefono finché non sono online (anche dopo chiusura/riavvio).
-- Cestino 30 giorni; dopo l'eliminazione definitiva i file restano altri 14 giorni (un ripristino li salva).
-- Backup automatico giornaliero del database (ultimi 60), copia di sicurezza prima di ogni ripristino, esporta/importa JSON.
-- Accesso libero: chiunque abbia il link può usare l'app.
+## Problemi veri risolti
+- **Salvataggi "offline" anche online.** Le letture di Vercel Blob possono restituire per minuti una versione
+  vecchia di un file sovrascritto. Ho spostato la versione autorevole su `head()` (sempre aggiornata) e
+  scrivo una copia immutabile per ogni versione: le letture non sono più ambigue.
+- **Caricamento delle foto rotto su un solo modello di telefono.** La causa erano intestazioni HTTP non ammesse
+  dalle regole CORS dell'archivio. Ora il server di prova usato nei test ammette solo le intestazioni reali,
+  così l'errore non può ripresentarsi senza che un test fallisca.
+- **Limiti del piano gratuito.** Il vincolo vero non è lo spazio ma il numero di scritture al mese: un contatore
+  nelle Impostazioni mostra il consumo rispetto ai limiti.
 
 ## Test
-- `node --test test/lib.test.mjs` — logica dati (cestino, backup, concorrenza, import)
-- `node test/mock-server.mjs 8787` + `IMG=<cartella immagini> node test/e2e.mjs` — collaudo completo nel browser
+```
+npm ci
+node --test test/lib.test.mjs          # logica dati: cestino, backup, concorrenza, import
+node test/mock-server.mjs 8787          # archivio finto in locale
+IMG=<cartella di immagini> node test/e2e.mjs   # collaudo completo nel browser
+```
+
+## Come l'ho costruita
+L'ho progettata e diretta io; il codice è scritto in gran parte con **Claude Code**, come si vede dagli autori
+dei commit. Il mio lavoro: definire i requisiti con chi usa l'app, decidere architettura e compromessi,
+pretendere test e prove prima di ogni rilascio, diagnosticare i guasti in produzione (i due sopra) e
+verificarne la correzione. È lo stesso metodo che uso sui progetti di lavoro.
+
+## Configurazione
+Variabili d'ambiente su Vercel: `BLOB_READ_WRITE_TOKEN` (store Blob collegato al progetto) e `APP_CODE`
+(chiave privata da cui si ricava il percorso dei dati).
+
+**Nota**: l'app è pensata per un piccolo gruppo di persone di fiducia e l'accesso è libero per chi conosce
+l'indirizzo. Per un uso aperto servirebbe un'autenticazione vera (la base c'è in `api/_lib.js`).
