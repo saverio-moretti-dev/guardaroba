@@ -1,5 +1,12 @@
 {
   "regions": ["fra1"],
+  "images": {
+    "sizes": [256, 640],
+    "qualities": [85],
+    "formats": ["image/avif", "image/webp"],
+    "minimumCacheTTL": 2678400,
+    "remotePatterns": [{ "protocol": "https", "hostname": "^[a-z0-9]+\\.public\\.blob\\.vercel-storage\\.com$", "pathname": "^/photos/.*$" }]
+  },
   "rewrites": [
     { "source": "/icon-192.png", "destination": "/api/icon?s=192" },
     { "source": "/icon-512.png", "destination": "/api/icon?s=512" },

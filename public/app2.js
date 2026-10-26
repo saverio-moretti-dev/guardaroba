@@ -29,10 +29,19 @@ function topBar(title){
   return `<header class="top"><h1>${esc(title)}</h1><span id="savebar" class="savebar"></span>${S.authed ? '' : '<button class="pill-btn" data-act="settings">Attiva</button>'}<button class="iconbtn" data-act="help" aria-label="Aiuto">?</button><button class="iconbtn" data-act="settings" aria-label="Impostazioni">${I.gear}</button></header>`;
 }
 function thumbsHtml(photos, uploads, mode, id){
-  const ph = photos.map((p, i) => `<div class="thumb"><img loading="lazy" src="${esc(p.url)}" alt=""><span class="n">${i+1}</span>
+  if (S.sel && mode === 'item') return photos.map((p, i) => `<button type="button" class="thumb ${S.sel.has(p.url) ? 'on' : ''}" data-sel="${esc(p.url)}" aria-pressed="${S.sel.has(p.url)}">${miniImg(p.url)}<span class="n">${i+1}</span>${S.sel.has(p.url) ? '<span class="ck">✓</span>' : ''}</button>`).join('');
+  const ph = photos.map((p, i) => `<div class="thumb">${miniImg(p.url)}<span class="n">${i+1}</span>
     <div class="tools"><button data-ph="first" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Metti come copertina">★</button><button data-ph="l" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Sposta a sinistra">‹</button><button data-ph="r" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Sposta a destra">›</button><button data-ph="x" data-i="${i}" data-id="${id||''}" data-m="${mode}" aria-label="Elimina" style="color:var(--bad)">✕</button></div></div>`).join('');
   const up = uploads.map(u => `<div class="thumb"><img src="${u.thumb}" alt=""><div class="st" data-up="${u.key}">${u.status==='errore' ? '⚠︎ riprovo…' : u.status==='su' ? Math.round((u.progress||0)*100) + '%' : 'in coda'}</div></div>`).join('');
   return ph + up;
+}
+// Foto in un menu che si apre e si chiude (chiuso di base: copertina + numero)
+function photoBox(photos, ups, mode, id){
+  const open = LS.get('photosOpen', false) || !!S.sel;
+  const cover = photos[0] ? miniImg(photos[0].url, 256, false) : ups[0] ? `<img src="${ups[0].thumb}" alt="">` : '<span class="ph"></span>';
+  return `<button type="button" class="pbox" data-act="togglephotos" aria-expanded="${open}">${cover}
+    <span class="grow"><b>${photos.length} foto</b>${ups.length ? ` <span class="muted small">+${ups.length} in caricamento</span>` : ''}</span><span class="chev">${open ? '▴' : '▾'}</span></button>
+    ${open ? `<div class="thumbs">${thumbsHtml(photos, ups, mode, id)}</div>` : ''}`;
 }
 
 function viewFoto(){
@@ -50,9 +59,10 @@ function viewFoto(){
         <button class="btn primary big" data-act="cam">${I.cam}Scatta</button>
         <button class="btn soft big" data-act="gal">${I.gal}Galleria</button>
       </div>
-      ${n || ups.length ? `<div class="thumbs">${thumbsHtml(f.photos, ups, 'folder')}</div>` : ''}
+      ${n || ups.length ? photoBox(f.photos, ups, 'folder') : ''}
       ${errs ? `<button class="btn block" data-act="retry">Riprova ora</button>` : ''}
-      <button class="btn primary block big" data-act="close" ${!n || busy ? 'disabled' : ''}>${busy ? 'Caricamento…' : 'Salva articolo →'}</button>
+      <button class="btn primary block big" data-act="close" ${!n && !ups.length ? 'disabled' : ''}>Salva articolo →</button>
+      ${busy ? '<div class="small muted">Puoi salvare e fare altro: le foto continuano a caricarsi e finiscono nell\'articolo.</div>' : ''}
     </div>
     ${recentStrip()}
   </div>`;
@@ -74,9 +84,10 @@ function stepsTracker(it){
   return `<div class="tracker">${STEPS.map(([k,l], i) => `<button type="button" data-step="${k}" class="${i < cur ? 'done' : i === cur ? 'cur' : ''}" aria-pressed="${i <= cur}"><span class="box">${i <= cur ? '✓' : ''}</span>${l}</button>`).join('')}</div>`;
 }
 function itemRow(it){
+  it = {...V(it), id:it.id, status:it.status, photos:it.photos, title:it.title};
   const cover = it.photos && it.photos[0];
   return `<button class="it" data-open="${it.id}">
-    ${cover ? `<img loading="lazy" src="${esc(cover.url)}" alt="">` : `<span class="ph"></span>`}
+    ${cover ? miniImg(cover.url, 256) : `<span class="ph"></span>`}
     <span class="grow"><div class="ti">${esc(it.title || [it.brand, it.category].filter(Boolean).join(' ') || 'Senza titolo')}</div>
     <div class="small muted" style="margin:2px 0 5px">${esc([it.size && 'Tg ' + it.size, it.owner].filter(Boolean).join(' · '))}${it.photos ? ` · ${it.photos.length} foto` : ''}</div>
     ${stepsMini(it)}</span>
@@ -101,7 +112,7 @@ function viewItems(){
     <input class="t" id="q" placeholder="Cerca brand, titolo, taglia…" value="${esc(S.q)}" style="margin-bottom:10px">
     <div class="chips scroll" style="margin-bottom:12px">${filters.map(([k,l]) => `<button class="chip ${S.filter===k?'on':''}" data-filter="${k}">${l} <span class="small" style="opacity:.7">${countFor(k)}</span></button>`).join('')}</div>
     ${list.length ? `<div class="list">${list.map(itemRow).join('')}</div>` : `<div class="empty">Nessun articolo qui.</div>`}
-    ${sold.length ? `<div class="card small muted" style="margin-top:16px">Venduti: <b>${sold.length}</b> · Incasso <b>${fmt(incasso)} €</b>${costi ? ` · Guadagno <b>${fmt(incasso - costi)} €</b>` : ''}</div>` : ''}
+    ${sold.length && shown('price') ? `<div class="card small muted" style="margin-top:16px">Venduti: <b>${sold.length}</b> · Incasso <b>${fmt(incasso)} €</b>${costi ? ` · Guadagno <b>${fmt(incasso - costi)} €</b>` : ''}</div>` : ''}
   </div>`;
 }
 const num = (v) => { const n = parseFloat(String(v||'').replace(',', '.')); return isFinite(n) ? n : 0; };
@@ -149,42 +160,45 @@ function viewEdit(){
   const it = S.db.items[S.editId];
   const ups = pendingFor(it.id);
   const owners = [...new Set([S.me, ...items().map(i => i.owner).filter(Boolean)])];
+  const canGen = ['brand','category','size','condition','colors','material','measures'].some(shown); // Genera serve solo con dei campi da cui partire
   const tf = (k, label, ph='', mode='text', extra='') => `<div class="field"><label class="f" for="f_${k}">${label}</label><input class="t" id="f_${k}" data-f="${k}" type="text" ${mode==='num'?'inputmode="decimal"':''} placeholder="${esc(ph)}" value="${esc(it[k])}" ${extra}></div>`;
   return `<div class="wrap">
     <div class="sub"><button class="iconbtn" data-act="back" aria-label="Indietro">${I.back}</button><h2>${esc(it.title || 'Scheda articolo')}</h2><span id="savebar" class="savebar"></span></div>
     <div class="card stack">
-      <div class="row"><span class="grow small muted">${it.photos.length} foto${it.createdBy ? ' · di ' + esc(it.createdBy) : ''}</span></div>
-      <div class="thumbs">${thumbsHtml(it.photos, ups, 'item', it.id)}</div>
-      <div class="two"><button class="btn soft" data-act="cam-item">${I.cam}Scatta</button><button class="btn soft" data-act="gal-item">${I.gal}Galleria</button></div>
-      ${it.photos.length ? `<button class="btn block" data-act="shareph">${I.share}Inoltra tutte le foto (${it.photos.length})</button>` : ''}
+      <!-- <div class="row"><span class="grow small muted">${it.photos.length} foto${it.createdBy ? ' · di ' + esc(it.createdBy) : ''}</span></div> -->
+      ${photoBox(it.photos, ups, 'item', it.id)}
+      ${S.sel ? `<div class="row"><span class="grow small"><b>${S.sel.size}</b> di ${it.photos.length} scelte</span><button class="btn" style="min-height:40px" data-act="selall">${S.sel.size === it.photos.length ? 'Nessuna' : 'Tutte'}</button><button class="btn" style="min-height:40px" data-act="selend">Fine</button></div>
+      <div class="two"><button class="btn primary" data-act="sel-save" ${S.sel.size ? '' : 'disabled'}>${I.dl}Salva (${S.sel.size})</button><button class="btn primary" data-act="sel-share" ${S.sel.size ? '' : 'disabled'}>${I.share}Condividi (${S.sel.size})</button></div>`
+      : `<div class="two"><button class="btn soft" data-act="cam-item">${I.cam}Scatta</button><button class="btn soft" data-act="gal-item">${I.gal}Galleria</button></div>
+      ${it.photos.length ? `<div class="two"><button class="btn" data-act="dl">${I.dl}Scarica tutto</button><button class="btn" data-act="selstart">Seleziona…</button></div>` : ''}`}
     </div>
     <button class="btn primary block big" data-act="copymode" style="margin:14px 0">${I.copy}Copia su Vinted</button>
     <div class="card">
       ${tf('title', 'Titolo', 'es. Maglione Zara in lana beige', 'text', 'maxlength="100"')}
-      <div class="small muted" style="margin-top:4px;display:flex;justify-content:space-between"><span id="tcount">${(it.title||'').length}/100</span><button type="button" class="small" style="color:var(--acc);font-weight:600" data-act="gentitle">Genera</button></div>
-      ${tf('brand', 'Brand', 'es. Zara')}
-      ${tf('category', 'Categoria', 'es. Maglione, Jeans, Vestito…')}
-      <div class="field"><label class="f">Taglia</label>${chipGroup('size', TAGLIE, it.size)}<input class="t" style="margin-top:8px" data-f="size" id="f_size" placeholder="Altra taglia (es. 42, W30)" value="${esc(TAGLIE.includes(it.size) ? '' : it.size)}"></div>
-      <div class="field"><label class="f">Condizioni</label>${chipGroup('condition', CONDIZIONI, it.condition)}</div>
-      <div class="field"><label class="f">Colore (max 2)</label>${chipGroup('colors', COLORI, it.colors, true)}</div>
-      ${tf('material', 'Materiale (facoltativo)', 'es. 100% cotone')}
-      ${tf('measures', 'Misure', 'es. ascelle 52 cm, lungh. 68 cm')}
+      <div class="small muted" style="margin-top:4px;display:flex;justify-content:space-between"><span id="tcount">${(it.title||'').length}/100</span>${canGen ? `<button type="button" class="small" style="color:var(--acc);font-weight:600" data-act="gentitle">Genera</button>` : ''}</div>
+      ${shown('brand') ? tf('brand', 'Brand', 'es. Zara') : ''}
+      ${shown('category') ? tf('category', 'Categoria', 'es. Maglione, Jeans, Vestito…') : ''}
+      ${shown('size') ? `<div class="field"><label class="f">Taglia</label>${chipGroup('size', TAGLIE, it.size)}<input class="t" style="margin-top:8px" data-f="size" id="f_size" placeholder="Altra taglia (es. 42, W30)" value="${esc(TAGLIE.includes(it.size) ? '' : it.size)}"></div>` : ''}
+      ${shown('condition') ? `<div class="field"><label class="f">Condizioni</label>${chipGroup('condition', CONDIZIONI, it.condition)}</div>` : ''}
+      ${shown('colors') ? `<div class="field"><label class="f">Colore (max 2)</label>${chipGroup('colors', COLORI, it.colors, true)}</div>` : ''}
+      ${shown('material') ? tf('material', 'Materiale (facoltativo)', 'es. 100% cotone') : ''}
+      ${shown('measures') ? tf('measures', 'Misure', 'es. ascelle 52 cm, lungh. 68 cm') : ''}
       <div class="field"><label class="f" for="f_description">Descrizione</label><textarea class="t" id="f_description" data-f="description" placeholder="">${esc(it.description)}</textarea>
-        <button type="button" class="btn soft block" style="margin-top:8px" data-act="gendesc">Genera descrizione</button></div>
-      <div class="two" style="margin-top:16px">${tf('price', 'Prezzo €', '15', 'num')}${tf('cost', 'Pagato € (privato)', '', 'num')}</div>
-      <div class="field"><label class="f">Pacco</label>${chipGroup('parcel', PACCHI, it.parcel)}</div>
-      <hr class="sep">
-      <div class="field"><label class="f">Di chi è</label>${chipGroup('owner', owners, it.owner)}</div>
-      ${tf('location', 'Dove si trova', 'es. scatola 2, armadio camera')}
-      ${tf('vintedUrl', 'Link annuncio Vinted', 'https://www.vinted.it/items/…')}
-      <div class="field"><label class="f" for="f_notes">Note interne</label><textarea class="t" style="min-height:70px" id="f_notes" data-f="notes" placeholder="Visibili solo a voi">${esc(it.notes)}</textarea></div>
+        ${canGen ? `<button type="button" class="btn soft block" style="margin-top:8px" data-act="gendesc">Genera descrizione</button>` : ''}</div>
+      ${shown('price') || shown('cost') ? `<div class="two" style="margin-top:16px">${shown('price') ? tf('price', 'Prezzo €', '15', 'num') : ''}${shown('cost') ? tf('cost', 'Pagato € (privato)', '', 'num') : ''}</div>` : ''}
+      ${shown('parcel') ? `<div class="field"><label class="f">Pacco</label>${chipGroup('parcel', PACCHI, it.parcel)}</div>` : ''}
+      ${['owner','location','vintedUrl','notes'].some(shown) ? '<hr class="sep">' : ''}
+      ${shown('owner') ? `<div class="field"><label class="f">Di chi è</label>${chipGroup('owner', owners, it.owner)}</div>` : ''}
+      ${shown('location') ? tf('location', 'Dove si trova', 'es. scatola 2, armadio camera') : ''}
+      ${shown('vintedUrl') ? tf('vintedUrl', 'Link annuncio Vinted', 'https://www.vinted.it/items/…') : ''}
+      ${shown('notes') ? `<div class="field"><label class="f" for="f_notes">Note interne</label><textarea class="t" style="min-height:70px" id="f_notes" data-f="notes" placeholder="Visibili solo a voi">${esc(it.notes)}</textarea></div>` : ''}
     </div>
     <div class="card stack" style="margin-top:14px">
       <label class="f" style="margin:0">Stato</label>
       ${stepsTracker(it)}
 
-      ${it.status === 'venduto' ? `<div class="two">${tf('soldPrice', 'Venduto a €', it.price || '', 'num')}<div></div></div>` : ''}
-      ${it.vintedUrl ? `<a class="btn block" href="${esc(it.vintedUrl)}" target="_blank" rel="noopener">${I.ext}Apri annuncio su Vinted</a>` : ''}
+      ${it.status === 'venduto' && shown('price') ? `<div class="two">${tf('soldPrice', 'Venduto a €', it.price || '', 'num')}<div></div></div>` : ''}
+      ${it.vintedUrl && shown('vintedUrl') ? `<a class="btn block" href="${esc(it.vintedUrl)}" target="_blank" rel="noopener">${I.ext}Apri annuncio su Vinted</a>` : ''}
       ${it.status === 'venduto' && it.photos.length ? `<button class="btn block" data-act="freephotos">Cancella foto (libera spazio)</button>` : ''}
       <button class="btn danger block" data-act="delitem">Elimina articolo</button>
     </div>
@@ -203,6 +217,7 @@ function syncEdit(){
 }
 
 function copyFields(it){
+  it = {...V(it), photos:it.photos};
   const R = (k, label, value, kind='copy', hint='') => ({k, label, value, kind, hint});
   return [
     R('foto', 'Foto', `${it.photos.length} foto`, 'photos'),
@@ -227,14 +242,15 @@ function viewCopy(){
   const done = S.copied[it.id] || new Set();
   const fields = copyFields(it);
   const nextK = (fields.find(f => !done.has(f.k)) || {}).k;
-  const missing = [!it.title && 'titolo', !it.description && 'descrizione', !it.price && 'prezzo', !it.condition && 'condizioni', !it.size && 'taglia'].filter(Boolean);
+  const v = V(it);
+  const missing = [!v.title && 'titolo', !v.description && 'descrizione', shown('price') && !v.price && 'prezzo', shown('condition') && !v.condition && 'condizioni', shown('size') && !v.size && 'taglia'].filter(Boolean);
   return `<div class="wrap">
     <div class="sub"><button class="iconbtn" data-act="back" aria-label="Indietro">${I.back}</button><h2>Copia su Vinted</h2><button class="iconbtn" data-act="help" aria-label="Aiuto">?</button></div>
     ${missing.length ? `<div class="hint" style="margin-bottom:12px;color:var(--warn)">Mancano: ${missing.join(', ')}</div>` : ''}
     ${fields.map(f => {
       const cls = `copyrow ${done.has(f.k) ? 'done' : ''} ${f.k === nextK ? 'next' : ''}`;
       if (f.kind === 'photos') return `<div class="${cls}" style="flex-wrap:wrap"><span class="grow"><div class="k">${f.label}</div><div class="v">${esc(f.value)}</div></span>
-        <button class="btn soft" data-act="dl" style="min-height:44px">${I.dl}Scarica</button>${navigator.canShare ? `<button class="btn soft" data-act="shareph" style="min-height:44px">${I.share}</button>` : ''}</div>`;
+        <button class="btn soft" data-act="dl" style="min-height:44px">${I.dl}Scarica tutto</button>${navigator.canShare ? `<button class="btn soft" data-act="shareph" style="min-height:44px">${I.share}</button>` : ''}</div>`;
       return `<button class="${cls}" data-copy="${f.k}" data-kind="${f.kind}"><span class="grow"><div class="k">${f.label}${f.hint ? ` · <span style="text-transform:none;font-weight:500">${f.hint}</span>` : ''}</div><div class="v">${esc(f.value)}</div></span>
         <span class="go ${f.kind==='rem'?'rem':''}">${done.has(f.k) ? '✓' : f.kind === 'rem' ? 'Scegli' : 'Copia'}</span></button>`;
     }).join('')}
@@ -249,14 +265,14 @@ function helpSheet(){
   const Q = (t, b) => `<details class="help"><summary>${t}</summary><div>${b}</div></details>`;
   sheet(`<h3>Come funziona</h3>
     ${Q('1 · Foto', 'Tocca <b>Scatta</b> per ogni foto (o <b>Galleria</b>). Su Android puoi anche condividere da Google Foto → <b>Guardaroba</b>. Quando hai finito tocca <b>Salva articolo</b>: il contatore torna a 0.')}
-    ${Q('2 · Scheda', 'Compila brand, categoria, taglia, condizioni, colore e prezzo. <b>Genera</b> crea titolo e descrizione. Salva da sola.')}
-    ${Q('3 · Copia su Vinted', 'Apri Vinted → Vendi. Nell\'app tocca un campo: è copiato. Incollalo su Vinted e passa al successivo. <b>Scarica</b> salva le foto nel telefono, così le trovi nel selettore di Vinted. Alla fine salva come bozza su Vinted e tocca <b>Salvata bozza</b>.')}
+    ${Q('2 · Scheda', 'Scrivi titolo e descrizione: salva da sola. Altri campi (brand, taglia, prezzo…) si accendono in ⚙︎ → Campi della scheda.')}
+    ${Q('3 · Copia su Vinted', 'Apri Vinted → Vendi. Nell\'app tocca un campo: è copiato. Incollalo su Vinted e passa al successivo. <b>Scarica tutto</b> salva le foto nella galleria (su iPhone tocca «Salva immagini» nel menu), così le trovi nel selettore di Vinted. Con <b>Seleziona…</b> scegli quali foto salvare o condividere. Alla fine salva come bozza su Vinted e tocca <b>Salvata bozza</b>.')}
     ${Q('4 · Pubblica', 'In <b>Pubblica</b> trovi la bozza di oggi: su Vinted apri Profilo → Bozze → Carica, poi tocca <b>Pubblicato</b>.')}
     ${Q('Spunte di stato', 'Da creare → Bozza → Pubblicata → Venduta. Toccale nella scheda per cambiare stato.')}
     ${Q('Redrip', 'Si usa dal computer in Chrome sul tuo guardaroba Vinted. Imposta il link del profilo in ⚙︎.')}
     ${Q('Installare l\'app', 'Android: Chrome → ⋮ → Installa app. iPhone: Safari → Condividi → Aggiungi a Home.')}
     ${Q('Qualità foto', 'A 100 la foto resta identica all\'originale del telefono. Sotto 100 viene ricompressa alla stessa risoluzione per occupare meno spazio.')}
-    ${Q('Sicurezza dei dati', 'Ogni foto resta salvata sul telefono finché non è online, anche se chiudi l\'app. Articoli e foto eliminati restano nel cestino 30 giorni. Anche dopo l\'eliminazione definitiva le foto restano recuperabili altri 14 giorni. Ogni giorno viene fatto un backup automatico (ultimi 60 giorni) e puoi esportare tutto in un file.')}
+    ${Q('Sicurezza dei dati', 'Ogni foto resta salvata sul telefono finché non è online, anche se chiudi l\'app: su Android il caricamento continua anche ad app chiusa, su iPhone riprende da solo quando la riapri. Articoli e foto eliminati restano nel cestino 30 giorni. Anche dopo l\'eliminazione definitiva le foto restano recuperabili altri 14 giorni. Ogni giorno viene fatto un backup automatico (ultimi 60 giorni) e puoi esportare tutto in un file.')}
     ${Q('In due', 'Aprite lo stesso link: le modifiche dell\'altro arrivano in meno di un minuto.')}
     <button class="btn primary block" style="margin-top:14px" data-close>OK</button>`).addEventListener('click', e => { if (e.target.closest('[data-close]')) e.currentTarget.remove(); });
 }
@@ -291,6 +307,10 @@ function settingsSheet(){
       <div class="field"><label class="f">Pacco predefinito</label>${opt('parcel', [['','Nessuno'],['Piccolo','Piccolo'],['Medio','Medio'],['Grande','Grande']], local.parcel)}</div>
       <div class="field"><label class="f">Frase finale della descrizione</label><textarea class="t" id="s_footer" style="min-height:80px" placeholder="${esc(DEFAULT_FOOTER)}">${esc(st.descFooter || '')}</textarea></div>
       <label class="switch"><span>Hashtag nella descrizione</span><input type="checkbox" id="s_tags" ${hashtagsOn() ? 'checked' : ''}></label>
+    </div>
+    <div class="sec"><h4>Campi della scheda</h4>
+      <div class="small muted">Titolo e descrizione ci sono sempre. Accendi gli altri che ti servono (su questo telefono).</div>
+      ${EXTRA.map(([k, l]) => `<label class="switch"><span>${l}</span><input type="checkbox" data-show="${k}" ${shown(k) ? 'checked' : ''}></label>`).join('')}
     </div>
     <div class="sec"><h4>App</h4>
       <div class="field"><label class="f">Tema</label>${opt('theme', [['auto','Automatico'],['light','Chiaro'],['dark','Scuro']], local.theme)}</div>
@@ -338,6 +358,7 @@ function settingsSheet(){
     } else if (act === 'save'){
       const me = $('#s_me', s).value.trim(); if (me){ S.me = me; LS.set('me', me); }
       LS.set('photoQ', setQ(qn.value));
+      const sf = {}; s.querySelectorAll('[data-show]').forEach(x => { if (x.checked) sf[x.dataset.show] = true; }); LS.set('showFields', sf);
       const data = {};
       const prof = $('#s_prof', s).value.trim(); if (prof !== (st.vintedProfile || '')) data.vintedProfile = prof;
       if (local.parcel !== (st.defaultParcel || '')) data.defaultParcel = local.parcel;
@@ -358,6 +379,7 @@ function bind(){
     const d = t.dataset;
     if (d.go) return go(d.go);
     if (d.open) return openEdit(d.open);
+    if (d.sel){ S.sel.has(d.sel) ? S.sel.delete(d.sel) : S.sel.add(d.sel); return refreshKeep(); }
     if (d.filter){ S.filter = d.filter; LS.set('filter', d.filter); return render(); }
     if (d.ph){
       const i = +d.i;
@@ -408,8 +430,14 @@ function bind(){
       case 'help': helpSheet(); break;
       case 'back': (history.state && history.state.v) ? history.back() : go(LS.get('view','items')); break;
       case 'copymode': await flush(); go('copy'); break;
-      case 'dl': downloadPhotos(S.editId); break;
-      case 'shareph': sharePhotos(S.editId); break;
+      case 'dl': sendPhotos(S.editId, null, 'save'); break;
+      case 'shareph': sendPhotos(S.editId, null, 'share'); break;
+      case 'togglephotos': LS.set('photosOpen', !LS.get('photosOpen', false)); if (S.sel && !LS.get('photosOpen')) S.sel = null; refreshKeep(); break;
+      case 'selstart': S.sel = new Set(); LS.set('photosOpen', true); refreshKeep(); break;
+      case 'selend': S.sel = null; refreshKeep(); break;
+      case 'selall': { const ph = S.db.items[S.editId].photos; S.sel = new Set(S.sel.size === ph.length ? [] : ph.map(p => p.url)); refreshKeep(); break; }
+      case 'sel-save': sendPhotos(S.editId, [...S.sel], 'save'); break;
+      case 'sel-share': sendPhotos(S.editId, [...S.sel], 'share'); break;
       case 'mark-bozza': setStatus(S.editId, 'bozza'); toast('Segnato come bozza su Vinted'); backToList(); break;
       case 'mark-online': setStatus(S.editId, 'online'); toast('Segnato come pubblicato'); backToList(); break;
       case 'resetcopy': delete S.copied[S.editId]; render(); break;
@@ -440,7 +468,7 @@ function bind(){
     }
   };
 }
-function readyEnough(it){ return !!(it.title && it.description && it.price && it.condition && it.size); }
+function readyEnough(it){ const v = V(it); return !!(v.title && v.description && ['price','condition','size'].every(k => !shown(k) || v[k])); }
 function refreshKeep(force){ if (force && document.activeElement) document.activeElement.blur(); const y = scrollY; render(); scrollTo(0, y); }
 
 ['camIn','galIn'].forEach(id => {
@@ -451,9 +479,9 @@ function refreshKeep(force){ if (force && document.activeElement) document.activ
 });
 
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; if (S.view === 'foto') refresh(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden){ pull(); drainInbox(); retryUploads(); flush(); } else flush(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden){ pull(); drainInbox(); applyDone(); retryUploads(); flush(); } else { flush(); bgSync(); } });
 window.addEventListener('online', () => { toast('Di nuovo online'); retryUploads(); flush(); });
-window.addEventListener('pagehide', () => { if (S.ops.length) flush(); });
+window.addEventListener('pagehide', () => { if (S.ops.length) flush(); bgSync(); });
 window.addEventListener('beforeunload', (e) => { if (S.uploads.some(u => u.status !== 'errore')){ e.preventDefault(); e.returnValue = ''; } });
 
 // ====================== Avvio ======================

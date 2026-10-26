@@ -13,9 +13,9 @@ su decine di capi, le schede si perdono, si duplicano e nessuno sa a che punto �
 
 ## Cosa fa
 - **Foto**: scatto dalla fotocamera o condivisione da Google Foto direttamente nell'app (Web Share Target).
-- **Scheda**: i campi di Vinted (marca, categoria, taglia, condizioni, colori, prezzo, pacco); titolo e
-  descrizione generati dai campi.
-- **Copia su Vinted**: un tocco per copiare ogni campo e scaricare le foto sul telefono.
+- **Caricamento in background**: le foto partono subito e si caricano mentre si continua a lavorare; su Android anche ad app chiusa (Background Sync), su iPhone riprendono alla riapertura. Nelle liste si vedono miniature leggere, non gli originali.
+- **Scheda**: titolo e descrizione; gli altri campi di Vinted (marca, taglia, condizioni, prezzo…) si accendono uno per uno nelle Impostazioni.
+- **Copia su Vinted**: un tocco per copiare ogni campo; **Scarica tutto** mette le foto in galleria (anche su iPhone), **Seleziona…** salva o condivide solo alcune foto; **Inoltra tutte le foto** le passa a un'app di AI per farsi scrivere i testi.
 - **Stato di ogni capo**: Da creare → Bozza → Pubblicata → Venduta; una bozza al giorno da pubblicare.
 - **Sicurezza dei dati**: cestino di 30 giorni, backup automatico giornaliero (ultimi 60), esporta/importa.
 

@@ -37,13 +37,13 @@ function trashSheet(){
     ${!its.length && !phs.length ? '<div class="empty">Il cestino è vuoto.</div>' : ''}
     ${its.length ? `<h4 class="lbl">Articoli (${its.length})</h4><div class="list">${its.map(it => `
       <div class="it" style="cursor:default">
-        ${it.photos && it.photos[0] ? `<img loading="lazy" src="${esc(it.photos[0].url)}" alt="">` : '<span class="ph"></span>'}
+        ${it.photos && it.photos[0] ? miniImg(it.photos[0].url, 256) : '<span class="ph"></span>'}
         <span class="grow"><div class="ti">${esc(it.title || [it.brand, it.category].filter(Boolean).join(' ') || 'Senza titolo')}</div>
         <div class="small muted">${(it.photos || []).length} foto · ancora ${daysLeft(it.deletedAt)} giorni</div></span>
         <button class="btn soft" style="min-height:40px;padding:0 12px" data-t="restore" data-id="${it.id}">Ripristina</button>
       </div>`).join('')}</div>` : ''}
     ${phs.length ? `<h4 class="lbl">Foto (${phs.length})</h4><div class="thumbs">${phs.map(p => `
-      <div class="thumb"><img loading="lazy" src="${esc(p.url)}" alt="">
+      <div class="thumb">${miniImg(p.url)}
         <div class="tools" style="justify-content:center"><button data-t="restorePhoto" data-url="${esc(p.url)}" ${S.db.items[p.itemId] ? '' : 'disabled title="Articolo non disponibile"'} aria-label="Ripristina" style="width:auto;padding:0 8px;font-size:12px">↺</button></div></div>`).join('')}</div>` : ''}
     ${its.length || phs.length ? `<button class="btn danger block" data-t="empty" style="margin-top:16px">Svuota cestino ora</button>` : ''}
     <button class="btn block" data-t="close" style="margin-top:10px">Chiudi</button>`);

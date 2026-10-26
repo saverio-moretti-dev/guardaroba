@@ -8,6 +8,12 @@ const STATI = [
   ['compilare','Da compilare'],['pronto','Pronto'],['bozza','Bozza su Vinted'],['online','Online'],['venduto','Venduto']
 ];
 const STATO_LABEL = Object.fromEntries(STATI);
+// Campi della scheda oltre a titolo e descrizione: nascosti di base (il codice resta),
+// si riaccendono uno per uno in Impostazioni → Campi della scheda (scelta di questo dispositivo).
+const EXTRA = [['brand','Brand'],['category','Categoria'],['size','Taglia'],['condition','Condizioni'],['colors','Colore'],['material','Materiale'],['measures','Misure'],['price','Prezzo e incasso'],['cost','Pagato (privato)'],['parcel','Pacco'],['owner','Di chi è'],['location','Dove si trova'],['vintedUrl','Link annuncio Vinted'],['notes','Note interne']];
+const shown = (k) => !!LS.get('showFields', {})[k];
+// Copia dell'articolo senza i campi nascosti: titolo, descrizione, copia su Vinted ed elenco vedono solo ciò che è acceso
+const V = (it) => { const o = {...it}; for (const [k] of EXTRA) if (!shown(k)) delete o[k]; if (!shown('price')) delete o.soldPrice; return o; };
 
 // ====================== Stato ======================
 const LS = {
@@ -19,6 +25,7 @@ const S = {
   me: LS.get('me', ''),
   view: LS.get('view', 'foto'),
   editId: null,
+  sel: null, // foto scelte per salvare/condividere (Set di url), null = selezione spenta
   filter: LS.get('filter', 'attivi'),
   q: '',
   folder: LS.get('folder', null), // {id, photos:[{url}]}
@@ -30,6 +37,10 @@ const S = {
 };
 const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Miniature: Vercel ridimensiona l'originale e lo converte in AVIF/WebP (decine di KB invece di MB), una volta sola, poi dalla cache.
+// In locale (test) non c'è l'ottimizzatore: originale. Se la miniatura non arriva (es. HEIC) si ripiega sull'originale.
+const mini = (u, w = 640) => /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? u : `/_vercel/image?url=${encodeURIComponent(u)}&w=${w}&q=85`;
+const miniImg = (u, w = 640, lazy = true) => `<img ${lazy ? 'loading="lazy" ' : ''}src="${esc(mini(u, w))}" data-full="${esc(u)}" onerror="this.onerror=null;this.src=this.dataset.full" alt="">`;
 const newId = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-12);
 const items = () => Object.values(S.db.items || {});
 const isAndroid = /Android/i.test(navigator.userAgent);
@@ -181,7 +192,8 @@ const setPendMeta = (m) => LS.set('pendingMeta', m);
 async function savePending(u){
   try{
     const c = await caches.open(PEND);
-    await c.put('/pending/' + u.key, new Response(u.file, {headers:{'content-type': u.file.type || 'application/octet-stream', 'x-name': encodeURIComponent(u.file.name || 'foto')}}));
+    // x-target e x-seq servono al service worker, che carica le foto anche ad app chiusa (Android)
+    await c.put('/pending/' + u.key, new Response(u.file, {headers:{'content-type': u.type || u.file.type || 'application/octet-stream', 'x-name': encodeURIComponent(u.file.name || 'foto'), 'x-target': encodeURIComponent(JSON.stringify(u.target)), 'x-seq': String(u.seq)}}));
     setPendMeta([...pendMeta().filter(m => m.key !== u.key), {key:u.key, target:u.target, seq:u.seq}]);
     return true;
   }catch(e){ console.warn('coda non salvata', e); return false; }
@@ -190,8 +202,35 @@ async function dropPending(key){
   setPendMeta(pendMeta().filter(m => m.key !== key));
   try{ await (await caches.open(PEND)).delete('/pending/' + key); }catch{}
 }
+// Foto caricate dal service worker mentre l'app era chiusa o in secondo piano: si registrano qui
+async function applyDone(){
+  if (!('caches' in window)) return 0;
+  let n = 0;
+  try{
+    const c = await caches.open('upload-done');
+    for (const k of await c.keys()){
+      const r = await c.match(k); if (!r) continue;
+      const d = await r.json();
+      if (d.target.kind === 'folder' && S.folder && S.folder.id === d.target.id){
+        if (!S.folder.photos.some(p => p.url === d.url)) S.folder.photos.push({url:d.url, size:d.size, seq:d.seq});
+        S.folder.photos.sort((a, b) => (a.seq || 0) - (b.seq || 0));
+        LS.set('folder', S.folder);
+      } else queue({op:'addPhotos', id:d.target.id, photos:[{url:d.url, size:d.size}]}); // il SW l'ha già registrata: il server ignora il doppione
+      const u = S.uploads.find(x => x.key === d.key); if (u){ URL.revokeObjectURL(u.thumb); S.uploads = S.uploads.filter(x => x !== u); }
+      setPendMeta(pendMeta().filter(m => m.key !== d.key));
+      await c.delete(k); n++;
+    }
+  }catch(e){ console.warn(e); }
+  if (n) refresh();
+  return n;
+}
+function bgSync(){
+  if (!S.uploads.length || !('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.ready.then(r => r.sync && r.sync.register('uploads')).catch(() => {});
+}
 async function restorePending(){
   if (!('caches' in window)) return;
+  await applyDone();
   const metas = pendMeta(); if (!metas.length) return;
   try{
     const c = await caches.open(PEND);
@@ -203,7 +242,7 @@ async function restorePending(){
       if (!r){ setPendMeta(pendMeta().filter(x => x.key !== m.key)); continue; }
       const blob = await r.blob();
       const file = new File([blob], decodeURIComponent(r.headers.get('x-name') || 'foto'), {type: blob.type});
-      S.uploads.push({key:m.key, seq:m.seq, thumb:URL.createObjectURL(file), status:'attesa', file, target:m.target, tries:0});
+      S.uploads.push({key:m.key, seq:m.seq, thumb:URL.createObjectURL(file), status:'attesa', file, type:fileType(file), target:m.target, tries:0});
       n++;
     }
     if (n){ toast(`Riprendo ${n} foto non ancora caricate`); refresh(); pumpUploads(); }
@@ -222,16 +261,22 @@ async function addFiles(files, target, inboxKeys){
   const added = [];
   list.forEach((f, i) => {
     const t = target.kind === 'folder' ? {kind:'folder', id:ensureFolder().id} : target;
-    const u = {key:newId() + i, seq:seqBase + i, thumb:URL.createObjectURL(f), status:'attesa', file:f, target:t, tries:0};
+    const u = {key:newId() + i, seq:seqBase + i, thumb:URL.createObjectURL(f), status:'prep', file:f, target:t, tries:0};
     S.uploads.push(u); added.push(u);
   });
   refresh();
+  // La qualità si applica prima di mettere in coda: così la stessa foto può partire dalla pagina o dal service worker
   for (let i = 0; i < added.length; i++){
-    await savePending(added[i]);
+    const u = added[i];
+    const {blob, type} = await prepareFile(u.file);
+    u.file = blob === u.file ? u.file : new File([blob], (u.file.name || 'foto').replace(/\.\w+$/, '') + '.jpg', {type}); u.type = type;
+    await savePending(u);
     if (inboxKeys && inboxKeys[i]){ try{ (await caches.open('share-inbox')).delete(inboxKeys[i]); }catch{} }
+    u.status = 'attesa'; pumpUploads();
   }
-  pumpUploads();
+  bgSync();
 }
+const withLock = (name, fn) => navigator.locks ? navigator.locks.request(name, fn) : fn();
 let pumping = false;
 async function pumpUploads(){
   if (pumping || !S.authed) return;
@@ -242,24 +287,12 @@ async function pumpUploads(){
       if (!u) break;
       u.status = 'su'; u.progress = 0; refresh();
       try{
-        const {blob, type} = await prepareFile(u.file);
-        if (!type) throw new Error('formato non supportato');
-        const id = u.target.id;
-        const ticket = await api('/api/upload', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({item:id, contentType:type, size:blob.size})});
-        const res = await putWithProgress(ticket.endpoint, ticket.headers, blob, (p) => {
-          u.progress = p; const el = document.querySelector(`[data-up="${u.key}"]`); if (el) el.textContent = Math.round(p * 100) + '%';
+        // Stesso lucchetto del service worker: una foto parte una volta sola
+        const taken = await withLock('up-' + u.key, async () => {
+          if ('caches' in window && !(await (await caches.open(PEND)).match('/pending/' + u.key))) return false;
+          await uploadOne(u); return true;
         });
-        const photo = {url:res.url, size:blob.size};
-        if (u.target.kind === 'folder' && S.folder && S.folder.id === id){
-          S.folder.photos.push({...photo, seq:u.seq});
-          S.folder.photos.sort((a, b) => (a.seq || 0) - (b.seq || 0));
-          LS.set('folder', S.folder);
-        } else if (u.target.kind === 'folder'){
-          // la cartella è già stata salvata come articolo: la foto va all'articolo
-          queue({op:'addPhotos', id, photos:[photo]});
-        } else {
-          queue({op:'addPhotos', id, photos:[photo]});
-        }
+        if (!taken){ await applyDone(); S.uploads = S.uploads.filter(x => x !== u); refresh(); continue; } // caricata dal service worker
         u.status = 'ok';
         await dropPending(u.key);
       }catch(e){
@@ -271,6 +304,26 @@ async function pumpUploads(){
       refresh();
     }
   }finally{ pumping = false; }
+}
+async function uploadOne(u){
+  const blob = u.file, type = u.type || fileType(u.file);
+  if (!type) throw new Error('formato non supportato');
+  const id = u.target.id;
+  const ticket = await api('/api/upload', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({item:id, contentType:type, size:blob.size})});
+  const res = await putWithProgress(ticket.endpoint, ticket.headers, blob, (p) => {
+    u.progress = p; const el = document.querySelector(`[data-up="${u.key}"]`); if (el) el.textContent = Math.round(p * 100) + '%';
+  });
+  const photo = {url:res.url, size:blob.size};
+  if (u.target.kind === 'folder' && S.folder && S.folder.id === id){
+    S.folder.photos.push({...photo, seq:u.seq});
+    S.folder.photos.sort((a, b) => (a.seq || 0) - (b.seq || 0));
+    LS.set('folder', S.folder);
+  } else if (u.target.kind === 'folder'){
+    // la cartella è già stata salvata come articolo: la foto va all'articolo
+    queue({op:'addPhotos', id, photos:[photo]});
+  } else {
+    queue({op:'addPhotos', id, photos:[photo]});
+  }
 }
 function retryUploads(){ S.uploads.forEach(u => { if (u.status === 'errore'){ u.status = 'attesa'; u.tries = 0; } }); pumpUploads(); }
 const pendingFor = (id) => S.uploads.filter(u => u.target.id === id);
@@ -295,7 +348,8 @@ async function drainInbox(){
 // ====================== Azioni ======================
 function closeFolder(){
   const f = S.folder;
-  if (!f || !f.photos.length) return;
+  // Si può salvare anche durante il caricamento: le foto ancora in coda vanno all'articolo appena arrivano
+  if (!f || (!f.photos.length && !pendingFor(f.id).length)) return;
   const parcel = (S.db.settings || {}).defaultParcel;
   queue({op:'upsert', id:f.id, data:{status:'compilare', owner:S.me, ...(parcel ? {parcel} : {})}});
   queue({op:'addPhotos', id:f.id, photos:f.photos.map(p => ({url:p.url, size:p.size}))});
@@ -321,6 +375,7 @@ async function discardFolder(){
   const id = S.folder.id;
   S.folder = null; LS.set('folder', null);
   if (photos.length) queue({op:'trashPhotos', id, photos});
+  if (S.db.items[id] && S.db.items[id].status === 'foto') queue({op:'delete', id}); // bozza nascosta creata dal caricamento in background
   refresh();
 }
 function itemMove(id, i, d){ const it = S.db.items[id]; queue({op:'setPhotos', id, photos:movePhoto(it.photos, i, d)}); refresh(); }
@@ -367,51 +422,83 @@ async function copyText(t){
 // Foto → telefono
 const slug = (s) => (String(s||'articolo').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,30) || 'articolo');
 const extOf = (url) => ((url.split('?')[0].split('.').pop() || 'jpg').toLowerCase().replace('jpeg','jpg'));
-async function downloadPhotos(id){
-  const it = S.db.items[id]; if (!it || !it.photos.length) return;
-  toast(`Scarico ${it.photos.length} foto…`);
+// Foto → galleria o condivisione.
+// iOS accetta navigator.share() solo subito dopo un tocco: se prima bisogna scaricare le foto il tocco "scade"
+// (era l'errore della condivisione). Quindi: foto già pronte → menu subito; altrimenti si preparano e un secondo
+// tocco apre il menu. Su iPhone "Salva N immagini" del menu le mette direttamente in Foto.
+const MIME = {jpg:'image/jpeg', png:'image/png', webp:'image/webp', heic:'image/heic', heif:'image/heif', avif:'image/avif'};
+const fileCache = new Map(); // url -> File
+async function photoFile(url, name){
+  if (fileCache.has(url)) return fileCache.get(url);
+  const b = await (await fetch(url)).blob();
+  const f = new File([b], name, {type: MIME[extOf(url)] || b.type || 'image/jpeg'});
+  if (fileCache.size > 40) fileCache.clear();
+  fileCache.set(url, f); return f;
+}
+function pickPhotos(id, urls){
+  const it = S.db.items[id]; if (!it) return [];
   const base = slug(it.title || it.brand);
+  return it.photos.map((p, i) => ({url:p.url, name:`${base}-${String(i+1).padStart(2,'0')}.${extOf(p.url)}`})).filter(p => !urls || urls.includes(p.url));
+}
+// mode: 'save' = nella galleria del telefono · 'share' = menu di condivisione (app, IA, messaggi)
+async function sendPhotos(id, urls, mode){
+  const photos = pickPhotos(id, urls);
+  if (!photos.length) return toast('Nessuna foto scelta');
+  if (!navigator.share || (mode === 'save' && !isIOS)) return downloadFiles(id, photos);
+  const cached = photos.map(p => fileCache.get(p.url));
+  if (cached.every(Boolean)) return shareFiles(id, cached, mode, photos);
+  toast(`Preparo ${photos.length} foto…`);
+  let files;
+  try{ files = await Promise.all(photos.map(p => photoFile(p.url, p.name))); }
+  catch{ return toast('Foto non scaricate: controlla la rete e riprova'); }
+  const s = sheet(`<h3>${files.length} foto pronte</h3>
+    <div class="hint" style="margin-bottom:12px">${mode === 'save' ? `Nel menu che si apre tocca <b>Salva ${files.length > 1 ? files.length + ' immagini' : 'immagine'}</b>: finiscono tutte in Foto.` : 'Scegli l\'app a cui mandarle.'}</div>
+    <button class="btn primary block big" data-s="go">${mode === 'save' ? I.dl + 'Salva in galleria' : I.share + 'Condividi'}</button>
+    <button class="btn block" data-s="no" style="margin-top:10px">Annulla</button>`);
+  s.addEventListener('click', e => {
+    const b = e.target.closest('[data-s]'); if (!b) return;
+    s.remove(); if (b.dataset.s === 'go') shareFiles(id, files, mode, photos); // nessuna attesa fra il tocco e share()
+  });
+}
+function shareFiles(id, files, mode, photos){
+  if (!navigator.canShare || !navigator.canShare({files})){ toast('Condivisione non supportata qui: scarico le foto'); return downloadFiles(id, photos); }
+  const it = S.db.items[id] || {};
+  // Il testo insieme ai file su iPhone fa sparire "Salva immagini" e può dare errore: solo file su iOS e per la galleria
+  const text = 'Foto di un capo da vendere su Vinted' + (it.title ? ': ' + it.title : '') + '. Scrivi titolo e descrizione.';
+  const data = mode === 'share' && !isIOS && navigator.canShare({files, text}) ? {files, text} : {files};
+  navigator.share(data).then(() => { markCopied(id, 'foto'); if (mode === 'save') toast('Foto salvate ✓'); }).catch(e => {
+    if (e.name === 'AbortError') return;
+    toast(e.name === 'NotAllowedError' ? 'Tocca di nuovo il pulsante' : 'Condivisione non riuscita (' + e.name + ')');
+  });
+}
+// Android e computer: scaricamento diretto (Android le mostra nella galleria, album Download)
+async function downloadFiles(id, photos){
+  toast(`Scarico ${photos.length} foto…`);
   let ok = 0;
-  for (let i = 0; i < it.photos.length; i++){
-    const url = it.photos[i].url;
-    const name = `${base}-${String(i+1).padStart(2,'0')}.${extOf(url)}`;
+  for (const p of photos){
     const a = document.createElement('a');
     try{
-      const b = await (await fetch(url)).blob();
-      a.href = URL.createObjectURL(b); a.download = name;
+      const f = await photoFile(p.url, p.name);
+      a.href = URL.createObjectURL(f); a.download = p.name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-      ok++;
     }catch{
-      a.href = url + (url.includes('?') ? '&' : '?') + 'download=1'; a.rel = 'noopener';
-      document.body.appendChild(a); a.click(); a.remove(); ok++;
+      a.href = p.url + (p.url.includes('?') ? '&' : '?') + 'download=1'; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); a.remove();
     }
-    await new Promise(r => setTimeout(r, 500));
+    ok++;
+    await new Promise(r => setTimeout(r, 400));
   }
   markCopied(id, 'foto');
-  toast(`${ok} foto salvate in Download: le trovi nel selettore di Vinted`);
+  toast(`${ok} foto salvate nel telefono (galleria → Download)`);
 }
-async function sharePhotos(id){
-  const it = S.db.items[id]; if (!it || !it.photos.length) return;
-  try{
-    toast('Preparo le foto…');
-    const base = slug(it.title || it.brand);
-    const files = await Promise.all(it.photos.map(async (p, i) => {
-      const b = await (await fetch(p.url)).blob();
-      return new File([b], `${base}-${String(i+1).padStart(2,'0')}.${extOf(p.url)}`, {type:b.type || 'image/jpeg'});
-    }));
-    const text = 'Foto di un capo da vendere su Vinted' + (it.title ? ': ' + it.title : '') + '. Scrivi titolo e descrizione.';
-    if (navigator.canShare && navigator.canShare({files})){
-      await navigator.share(navigator.canShare({files, text}) ? {files, text} : {files});
-      markCopied(id, 'foto');
-    }
-    else { toast('Condivisione non supportata qui: uso il download'); downloadPhotos(id); }
-  }catch(e){ if (e.name !== 'AbortError') toast('Condivisione non riuscita'); }
-}
+/* Versione precedente, sostituita da sendPhotos (su iPhone apriva File una foto per volta e la condivisione dava errore):
+   downloadPhotos(id) e sharePhotos(id) scaricavano tutte le foto e poi chiamavano navigator.share() fuori dal tocco. */
 
 // Descrizione automatica
 function hashtag(s){ return '#' + String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''); }
 function buildDescription(it){
+  it = V(it);
   const lines = [];
   const head = [it.category, it.brand].filter(Boolean).join(' ');
   if (head) lines.push(`${head}${it.colors && it.colors.length ? ' ' + it.colors.join('/').toLowerCase() : ''}.`);
@@ -433,6 +520,7 @@ function buildDescription(it){
 const DEFAULT_FOOTER = 'Spedisco in giornata o il giorno dopo. Per altre foto o domande scrivimi pure!';
 const hashtagsOn = () => { const v = (S.db.settings || {}).hashtags; return v !== false && v !== 'false'; };
 function buildTitle(it){
+  it = V(it);
   return [it.category, it.brand, it.colors && it.colors[0] ? it.colors[0].toLowerCase() : '', it.size ? 'tg ' + it.size : ''].filter(Boolean).join(' ').slice(0, 100);
 }
 
@@ -475,7 +563,7 @@ function backToList(){
   const steps = v === 'copy' ? 2 : v === 'edit' ? 1 : 0;
   if (steps) history.go(-steps); else go(LS.get('view','items'));
 }
-function openEdit(id){ go('edit', id); }
+function openEdit(id){ S.sel = null; go('edit', id); }
 window.addEventListener('popstate', () => {
   const st = history.state || {};
   if ((st.v === 'edit' || st.v === 'copy') && S.db.items[st.id]){ S.view = st.v; S.editId = st.id; }

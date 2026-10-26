@@ -1,6 +1,6 @@
 // Service worker: riceve le foto condivise dal telefono ("Condividi" -> Guardaroba)
 // e le mette in una coda locale; la pagina le carica nella cartella aperta.
-const SHELL = 'shell-v2';
+const SHELL = 'shell-v3';
 const ASSETS = ['/', '/app1.js', '/app2.js', '/app3.js', '/manifest.webmanifest', '/icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -14,6 +14,43 @@ self.addEventListener('activate', (e) => {
     await self.clients.claim();
   })());
 });
+
+// Caricamento in background (Android/Chrome, Background Sync): quando l'app va in secondo piano o si chiude
+// con foto in coda, il browser sveglia questo worker appena c'è rete e le foto partono da qui.
+// Stessa coda della pagina ('pending-uploads') e stesso lucchetto per foto: ognuna parte una volta sola.
+// Il risultato va subito sul server (addPhotos) e in 'upload-done', che la pagina legge alla riapertura.
+// iPhone non ha Background Sync: lì il caricamento riprende da solo quando si riapre l'app.
+self.addEventListener('sync', (e) => { if (e.tag === 'uploads') e.waitUntil(uploadQueue()); });
+const withLock = (name, fn) => (self.navigator && navigator.locks ? navigator.locks.request(name, fn) : fn());
+async function uploadQueue() {
+  const pend = await caches.open('pending-uploads');
+  const done = await caches.open('upload-done');
+  let failed = 0;
+  for (const req of await pend.keys()) {
+    const key = new URL(req.url).pathname.replace('/pending/', '');
+    try {
+      await withLock('up-' + key, async () => {
+        const r = await pend.match(req);
+        if (!r || !r.headers.get('x-target')) return; // già caricata dalla pagina, o voce di una versione vecchia
+        const target = JSON.parse(decodeURIComponent(r.headers.get('x-target')));
+        const seq = Number(r.headers.get('x-seq')) || 0;
+        const type = r.headers.get('content-type');
+        const blob = await r.blob();
+        const t = await fetch('/api/upload', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: target.id, contentType: type, size: blob.size }) });
+        if (!t.ok) throw new Error('permesso ' + t.status);
+        const ticket = await t.json();
+        const up = await fetch(ticket.endpoint, { method: 'PUT', headers: ticket.headers, body: blob });
+        if (!up.ok) throw new Error('caricamento ' + up.status);
+        const { url } = await up.json();
+        const photo = { url, size: blob.size };
+        await fetch('/api/db', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops: [{ op: 'addPhotos', id: target.id, photos: [photo] }], by: 'sfondo' }) });
+        await done.put('/done/' + key, new Response(JSON.stringify({ key, target, seq, ...photo }), { headers: { 'content-type': 'application/json' } }));
+        await pend.delete(req); // solo dopo aver scritto il risultato
+      });
+    } catch (err) { failed++; }
+  }
+  if (failed) throw new Error(failed + ' foto da riprovare'); // il browser ritenta più tardi
+}
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
