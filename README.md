@@ -58,3 +58,7 @@ Variabili d'ambiente su Vercel: `BLOB_READ_WRITE_TOKEN` (store Blob collegato al
 
 **Nota**: l'app è pensata per un piccolo gruppo di persone di fiducia e l'accesso è libero per chi conosce
 l'indirizzo. Per un uso aperto servirebbe un'autenticazione vera (la base c'è in `api/_lib.js`).
+
+## Licenza
+
+MIT, vedi [LICENSE](LICENSE).
