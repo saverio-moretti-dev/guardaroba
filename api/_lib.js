@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { get, head, put, del, list, BlobPreconditionFailedError } from '@vercel/blob';
 
+// 'x' serve solo ai test locali: in produzione APP_CODE è impostato su Vercel (README § Configurazione).
 const secret = () => process.env.APP_CODE || 'x';
 const hmac = (s) => crypto.createHmac('sha256', secret()).update(s).digest('hex');
 
@@ -15,6 +16,8 @@ export function authedWithCode(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Accesso libero per scelta (README § Nota): il link circola fra persone di fiducia.
+// authedWithCode e /api/login restano pronti per riattivare il controllo con codice.
 export function guard() {
   return true;
 }
