@@ -1,58 +1,49 @@
-# Vinted → cartella → Guardaroba: allineamento ripetibile
+# Strumenti Vinted → Guardaroba
 
-**Vinted comanda.** Titolo, descrizione, foto e prezzo degli annunci **attivi** del proprio profilo Vinted sono la
-versione giusta: la cartella `vinted-articoli/` (in questa repo, ignorata da git) e l'app Guardaroba si adeguano.
-I venduti non si riportano (scelta dell'utente). Le bozze Vinted nemmeno: solo gli annunci in vendita.
-
-Richiesta tipo dell'utente: «allinea Vinted» / «aggiorna guardaroba da Vinted». Si eseguono i passi sotto, senza
-chiedere, e alla fine si dice il conteggio.
+Piccoli script per tenere l'app allineata agli annunci **attivi** del proprio profilo Vinted, che restano la
+versione di riferimento: titolo, descrizione, foto e prezzo si copiano da Vinted verso l'app, mai al contrario.
+I venduti e le bozze di Vinted non si riportano.
 
 ## Cosa serve
-- Chrome con l'estensione **Claude in Chrome** collegata e l'account Vinted già aperto (mai inserire password).
-- `.env.local` nella radice della repo con `APP_URL=https://<app>.vercel.app` (ignorato da git: la repo è
-  **pubblica** e l'app è aperta a chi conosce l'indirizzo). Se manca, l'indirizzo è nelle sessioni passate:
-  `grep -rhoE "https://[a-z0-9-]*(guard|vinted)[a-z0-9-]*\.vercel\.app" ~/.claude/projects/ | sort -u`.
-- Profilo Vinted: in `.env.local`, `VINTED_PROFILE=https://www.vinted.it/member/<id>` (tenuto fuori dalla repo
-  pubblica per non legare l'account GitHub a quello Vinted). Se manca: l'id è nei dati della home di Vinted
-  (`"initialUserState":{"user":{"id":…`).
+- Chrome con il proprio account Vinted già aperto. Gli script di raccolta girano nella pagina, nel browser
+  dell'utente: nessuna password viene letta o salvata.
+- Un file `.env.local` nella radice della repo (escluso da git) con l'indirizzo dell'app (`APP_URL`) e quello
+  del proprio profilo Vinted (`VINTED_PROFILE`). Entrambi restano fuori dalla repo pubblica.
+- La cartella `vinted-articoli/` (esclusa da git) dove finiscono testi e foto scaricati.
 
-## Passi
-1. **Elenco** — aprire il profilo in Chrome, eseguire `elenco.js` con `javascript_tool`.
-   Seleziona il filtro «Attivi», scorre la pagina a passi, scarica `~/Downloads/vinted-elenco.json`.
-   Deve dire «N letti, il profilo ne dichiara N»: se i numeri differiscono, rilanciarlo.
-2. **Diff** — `node tools/vinted-import/allinea.mjs --diff`
-   Sposta l'elenco in `vinted-articoli/elenco.json` e stampa gli annunci da (ri)scaricare: NUOVO (nessuna
-   cartella) o TITOLO CAMBIATO. Il confronto è per id Vinted + titolo (una descrizione cambiata a titolo
-   uguale non si vede: in quel caso passare a mano l'id al passo 3).
-3. **Scarica** — in `estrai.js` mettere gli id in `IDS` (**massimo 5 per volta**), eseguirlo nella pagina Vinted.
-   Scarica un `~/Downloads/vinted-<id>.json` per annuncio, uno ogni 5 s. Poi:
-   `for f in ~/Downloads/vinted-[0-9]*.json; do python3 -I tools/vinted-import/salva_articolo.py "$f"; done`
-   → `vinted-articoli/<id>-<titolo>/` con `testo.txt` (solo titolo + descrizione) e `01.jpg…`. Se la cartella di
-   quell'id c'era già, la vecchia va nel Cestino di macOS. Ripetere 2–3 finché il diff dice «Da scaricare: 0».
-4. **App** — `node tools/vinted-import/allinea.mjs --dry` (prova), poi senza `--dry` (con un solo id per
-   provare il primo, poi tutti). Per ogni annuncio attivo: abbina l'articolo dell'app per `vintedUrl`, o la prima
-   volta per titolo esatto; imposta titolo, descrizione, stato **Pubblicata** (`online`), `vintedUrl`, prezzo.
-   Le foto si ricaricano solo se il numero è diverso (le vecchie vanno nel cestino dell'app, 30 giorni).
-   Un salvataggio per articolo, `by: 'allinea-vinted'`. Articoli dell'app «Pubblicata» senza annuncio attivo:
-   **solo elencati**, mai toccati (venduti o tolti: decide l'utente).
-5. **Verifica** — rilanciare `--dry`: deve dire «Nuovi 0, aggiornati 0, già in pari N». Poi
-   `curl -s $APP_URL/api/db` e contare gli `online` con `vintedUrl`, e che una foto risponda 200.
+## Allineamento in cinque passi
+1. **Elenco**: con il profilo aperto, eseguire `elenco.js` nella console della pagina. Attiva il filtro «Attivi»,
+   scorre la pagina a passi e scarica `vinted-elenco.json`. Il numero letto deve coincidere con quello dichiarato
+   dal profilo; altrimenti si rilancia.
+2. **Differenze**: `node tools/vinted-import/allinea.mjs --diff` stampa gli annunci nuovi o con titolo cambiato.
+   Una descrizione cambiata a titolo uguale non si vede: quell'id si passa a mano al passo 3.
+3. **Scaricamento**: mettere gli id in `IDS` dentro `estrai.js` (al massimo 5 per volta) ed eseguirlo nella
+   pagina Vinted; scarica un json per annuncio, uno ogni 5 secondi. Poi, per ogni file scaricato:
+   `python3 -I tools/vinted-import/salva_articolo.py <file>` crea `vinted-articoli/<id>-<titolo>/` con
+   `testo.txt` e le foto `01.jpg…`. Ripetere 2–3 finché non resta niente da scaricare.
+4. **App**: `node tools/vinted-import/allinea.mjs --dry` mostra cosa cambierebbe; senza `--dry` applica,
+   prima su un solo articolo e poi su tutti. Abbina gli articoli per link Vinted (la prima volta per titolo),
+   aggiorna testi, prezzo e stato «Pubblicata»; le foto si ricaricano solo se il numero è diverso e le vecchie
+   vanno nel cestino dell'app per 30 giorni. Gli articoli pubblicati nell'app ma non più attivi su Vinted
+   vengono solo elencati: venduti o ritirati lo decide una persona.
+5. **Verifica**: rilanciare `--dry`, che deve dire «Nuovi 0, aggiornati 0».
 
-## Cose imparate (non rifarle)
-- **Le foto visibili nella pagina sono solo le prime 5.** L'elenco completo sta nei dati dell'annuncio
-  (`"photos":[…]`, `full_size_url`). Errore fatto alla prima prova.
-- **Non passare i dati nella risposta dello strumento JS**: oltre qualche riga viene troncata e gli URL firmati si
-  rompono. Per questo si scaricano file json.
-- **Lo strumento JS di Chrome va in timeout a 45 s**: con 8 annunci è successo (il codice però continua nella pagina).
-- **Il filtro «Attivi» è un interruttore**: cliccarlo quando è già acceso lo spegne (e compaiono le bozze).
-  `elenco.js` guarda `aria-pressed`.
-- **Saltare direttamente in fondo alla pagina non carica tutto** (40 su 46): bisogna scorrere a passi.
-- **Alcuni annunci non hanno il blocco `ld+json`** (es. 9498784201, sempre): `estrai.js` prende il titolo da
-  `<title>` e la descrizione dai dati della pagina. Altre volte manca solo al primo colpo: c'è un secondo tentativo.
-- Dimensione massima delle foto: l'originale caricato (es. 600×800). `f1600` e simili danno 404.
-- Le foto arrivano in webp e diventano JPG con `sips` (macOS), comode da passare su iPhone.
-- Gli screenshot di Chrome vanno spesso in timeout su Vinted e sull'app: lavorare con JS e verificare via API.
-- Vinted vieta lo scraping automatico: **solo il proprio profilo**, dal Chrome dell'utente, a ritmo umano;
-  mai chiamate dirette alle API di Vinted.
-- Costo sul piano gratuito Vercel Blob (2.000 scritture/mese): circa 1 scrittura per foto + 2–4 per salvataggio.
-  Prima esecuzione completa (2026-11-04): 46 annunci, 337 foto.
+## Spostare le foto su Cloudinary
+`foto-cloudinary.mjs` ricarica su Cloudinary le foto degli articoli Vinted usando le copie in `vinted-articoli/`
+(gli stessi file caricati la prima volta) e sostituisce gli indirizzi nell'app. Tocca un articolo solo se numero,
+dimensione e ordine delle foto coincidono; senza `--go` è solo una prova. Prima di ogni modifica salva una mappa
+vecchio → nuovo, che `--undo <mappa>` usa per tornare indietro entro i 30 giorni del cestino.
+`verifica-cloudinary.py` controlla poi ordine, numero e contenuto di ogni foto spostata.
+
+## Cose imparate
+- Nella pagina di un annuncio sono visibili solo le prime 5 foto: l'elenco completo sta nei dati dell'annuncio.
+- I dati si scaricano come file json invece di copiarli dalla console: i testi lunghi e gli URL firmati si
+  troncano.
+- Il filtro «Attivi» è un interruttore: cliccarlo da acceso lo spegne. `elenco.js` controlla `aria-pressed`.
+- Saltare in fondo alla pagina non carica tutti gli annunci: bisogna scorrere a passi.
+- Alcuni annunci non hanno il blocco `ld+json`: `estrai.js` ripiega su `<title>` e sui dati della pagina.
+- Le foto arrivano in webp alla risoluzione caricata in origine e diventano JPG con `sips` (macOS).
+- Vinted non ammette la raccolta automatica: solo il proprio profilo, dal proprio browser, a ritmo umano, mai
+  chiamate dirette alle sue API.
+- Sul piano gratuito di Vercel Blob ogni foto costava una scrittura (limite 2.000 al mese): è uno dei motivi per
+  cui le foto ora stanno su Cloudinary.
