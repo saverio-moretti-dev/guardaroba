@@ -6,7 +6,6 @@ const secret = () => process.env.APP_CODE || 'x';
 const hmac = (s) => crypto.createHmac('sha256', secret()).update(s).digest('hex');
 
 // ---------- Accesso con codice condiviso ----------
-// Accesso libero: chi ha il link usa l'app (nessun codice).
 export function authed() { return true; }
 export function authedWithCode(req) {
   const m = /(?:^|;\s*)sess=([a-f0-9]+)/.exec(req.headers.cookie || '');
@@ -16,8 +15,7 @@ export function authedWithCode(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// Accesso libero per scelta (README § Nota): il link circola fra persone di fiducia.
-// authedWithCode e /api/login restano pronti per riattivare il controllo con codice.
+// Controllo con codice disattivato: authedWithCode e /api/login restano pronti per riattivarlo.
 export function guard() {
   return true;
 }
