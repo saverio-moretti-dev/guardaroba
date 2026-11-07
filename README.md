@@ -25,13 +25,16 @@ su decine di capi, le schede si perdono, si duplicano e nessuno sa a che punto �
 | Frontend | HTML + JavaScript senza framework, service worker | si apre all'istante sul telefono, funziona anche offline |
 | Backend | funzioni serverless Node su Vercel (`api/`) | nessun server da mantenere, costo zero |
 | Dati | un JSON su Redis (Upstash, piano gratuito) con **scritture condizionate** atomiche | due persone salvano insieme senza sovrascriversi; i salvataggi non consumano le scritture di Blob |
-| Foto | rimpicciolite sul telefono (lato lungo 2048 px) e caricate direttamente su Vercel Blob, con permesso per singola foto | nessun limite di dimensione delle funzioni; 1 scrittura Blob per foto |
+| Foto | rimpicciolite sul telefono (lato lungo 2048 px) e caricate direttamente su **Cloudinary** (piano gratuito, senza carta) con firma per singola foto; miniature fatte da Cloudinary | nessuna chiamata a Vercel Blob né al servizio immagini di Vercel; le foto vecchie restano su Blob e l'app le accetta ancora |
 | Offline | coda persistente sul telefono | foto e modifiche non si perdono se cade la rete o si chiude l'app |
 
 ## Problemi veri risolti
 - **Archivio sospeso per troppe scritture (novembre 2026).** Il database stava su Vercel Blob: ogni salvataggio
   costava 2–4 scritture e il piano gratuito (2.000 al mese) è finito in pochi giorni. Il database è passato su
   Redis; su Blob restano solo le foto, rimpicciolite prima del caricamento (gli originali riempivano 1 GB).
+  Lo store foto di Blob però è rimasto sospeso (lo sblocco lo fa solo lo staff Vercel): le foto nuove ora vanno
+  su Cloudinary, attivo solo se c'è `CLOUDINARY_URL`. Se il valore è malformato il server dà un errore che ne
+  descrive la forma senza mostrarlo. Da fare quando Vercel sblocca: spostare le foto vecchie su Cloudinary.
 - **Salvataggi "offline" anche online.** Le letture di Vercel Blob possono restituire per minuti una versione
   vecchia di un file sovrascritto. Ho spostato la versione autorevole su `head()` (sempre aggiornata) e
   scrivo una copia immutabile per ogni versione: le letture non sono più ambigue.
