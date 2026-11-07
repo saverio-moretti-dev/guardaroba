@@ -144,3 +144,15 @@ test('Cloudinary: firma come da documentazione, URL foto accettati', () => {
   assert.ok(!L.isPhotoUrl('https://res.cloudinary.com/demo/image/upload/v1/altro/abc123/x.jpg'));
   assert.ok(!L.isPhotoUrl('https://evil.example/photos/abc123/x.jpg'));
 });
+
+test('Cloudinary: CLOUDINARY_URL letto anche con prefisso/virgolette, errore chiaro se sbagliato', () => {
+  const old = process.env.CLOUDINARY_URL;
+  try {
+    process.env.CLOUDINARY_URL = ' CLOUDINARY_URL="cloudinary://123:ab-C_d@demo"\n';
+    assert.deepEqual(L.cloudinary(), { key: '123', secret: 'ab-C_d', cloud: 'demo' });
+    process.env.CLOUDINARY_URL = 'cloudinary://<your_api_key>:<your_api_secret>@demo';
+    assert.throws(() => L.cloudinary(), (e) => /segnaposto <> true/.test(e.message) && !e.message.includes('your_api'));
+    delete process.env.CLOUDINARY_URL;
+    assert.equal(L.cloudinary(), null);
+  } finally { if (old === undefined) delete process.env.CLOUDINARY_URL; else process.env.CLOUDINARY_URL = old; }
+});

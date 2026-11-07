@@ -100,8 +100,14 @@ const blobStore = {
 // Vercel Blob Hobby ha sospeso lo store foto il 6/11/2026: con CLOUDINARY_URL impostato le foto nuove vanno su
 // Cloudinary; quelle vecchie su Blob restano valide. Formato del pannello: cloudinary://<key>:<secret>@<cloud>
 export function cloudinary() {
-  const m = /^cloudinary:\/\/([^:]+):([^@]+)@([a-z0-9_-]+)$/i.exec(process.env.CLOUDINARY_URL || '');
-  return m && { key: m[1], secret: m[2], cloud: m[3] };
+  const raw = process.env.CLOUDINARY_URL;
+  if (!raw) return null;
+  const v = raw.trim().replace(/^CLOUDINARY_URL=/, '').replace(/^["']|["']$/g, '');
+  const m = /^cloudinary:\/\/([^:]+):([^@]+)@([a-z0-9_-]+)$/i.exec(v);
+  if (m && !/[<>]/.test(v)) return { key: m[1], secret: m[2], cloud: m[3] };
+  // Descrive la forma del valore senza mai mostrarlo (contiene il segreto)
+  throw new Error(`CLOUDINARY_URL non valido: lunghezza ${v.length}, inizia con cloudinary:// ${v.startsWith('cloudinary://')}, ` +
+    `contiene @ ${v.includes('@')}, segnaposto <> ${/[<>]/.test(v)}, spazi ${/\s/.test(v)}`);
 }
 export const cldSign = (params, secret) =>
   crypto.createHash('sha1').update(Object.keys(params).sort().map((k) => `${k}=${params[k]}`).join('&') + secret).digest('hex');
