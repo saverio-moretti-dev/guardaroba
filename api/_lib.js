@@ -80,7 +80,11 @@ const blobStore = {
       throw e;
     }
   },
-  async del(urls) { if (urls.length) await del(urls); },
+  async del(urls) {
+    const [cld, blob] = [urls.filter((u) => CLD_RE.test(u)), urls.filter((u) => !CLD_RE.test(u))];
+    if (cld.length) await cldDelete(cld);
+    if (blob.length) await del(blob);
+  },
   async list(prefix) {
     const out = [];
     let cursor;
@@ -92,6 +96,28 @@ const blobStore = {
     return out;
   },
 };
+// ---------- Foto su Cloudinary (piano gratuito, senza carta) ----------
+// Vercel Blob Hobby ha sospeso lo store foto il 6/11/2026: con CLOUDINARY_URL impostato le foto nuove vanno su
+// Cloudinary; quelle vecchie su Blob restano valide. Formato del pannello: cloudinary://<key>:<secret>@<cloud>
+export function cloudinary() {
+  const m = /^cloudinary:\/\/([^:]+):([^@]+)@([a-z0-9_-]+)$/i.exec(process.env.CLOUDINARY_URL || '');
+  return m && { key: m[1], secret: m[2], cloud: m[3] };
+}
+export const cldSign = (params, secret) =>
+  crypto.createHash('sha1').update(Object.keys(params).sort().map((k) => `${k}=${params[k]}`).join('&') + secret).digest('hex');
+const CLD_RE = /^https:\/\/res\.cloudinary\.com\/[a-z0-9_-]+\/image\/upload\/v\d+\/(photos\/[a-z0-9]{6,16}\/[A-Za-z0-9_-]+)\.[a-z0-9]+$/i;
+export async function cldAdmin(path, method = 'GET') {
+  const c = cloudinary();
+  if (!c) throw new Error('CLOUDINARY_URL mancante');
+  const r = await fetch(`https://api.cloudinary.com/v1_1/${c.cloud}/${path}`, { method, headers: { authorization: 'Basic ' + Buffer.from(`${c.key}:${c.secret}`).toString('base64') } });
+  if (!r.ok) throw new Error(`Cloudinary ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
+async function cldDelete(urls) { // Admin API: massimo 100 per chiamata, nessun credito consumato
+  const ids = urls.map((u) => CLD_RE.exec(u)[1]);
+  for (let i = 0; i < ids.length; i += 100) await cldAdmin('resources/image/upload?' + ids.slice(i, i + 100).map((x) => 'public_ids[]=' + encodeURIComponent(x)).join('&'), 'DELETE');
+}
+
 // ---------- Database su Redis (Upstash, piano gratuito: 500.000 comandi/mese) ----------
 // Il database stava su Vercel Blob: ogni salvataggio costava 2–4 scritture e il 6/11/2026 ha esaurito le 2.000
 // del piano gratuito (archivio sospeso, app ferma). Su Redis i salvataggi non consumano scritture Blob:
@@ -301,7 +327,7 @@ const ITEM_FIELDS = [
 const SETTINGS_KEYS = ['vintedProfile', 'redripNote', 'defaultParcel', 'descFooter', 'hashtags'];
 
 const isId = (s) => typeof s === 'string' && /^[a-z0-9]{6,16}$/.test(s);
-const PHOTO_RE = /^https:\/\/[a-z0-9.-]+\.public\.blob\.vercel-storage\.com\/photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/i;
+const PHOTO_RE = /^https:\/\/(?:[a-z0-9.-]+\.public\.blob\.vercel-storage\.com|res\.cloudinary\.com\/[a-z0-9_-]+\/image\/upload\/v\d+)\/photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/i;
 let photoRe = PHOTO_RE;
 export const setPhotoPattern = (re) => { photoRe = re; };
 export const isPhotoUrl = (u) => typeof u === 'string' && photoRe.test(u);
@@ -454,11 +480,3 @@ export async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
-export const isBlobUrl = (u) => {
-  try {
-    const x = new URL(u);
-    return x.protocol === 'https:' && x.hostname.endsWith('.public.blob.vercel-storage.com') && x.pathname.startsWith('/photos/');
-  } catch {
-    return false;
-  }
-};

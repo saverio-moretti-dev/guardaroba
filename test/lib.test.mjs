@@ -135,3 +135,12 @@ test('writeDb: i 60 backup più recenti vengono tenuti, i vecchi rimossi', async
   await L.writeDb([{ op: 'upsert', id: 'jjjjjj01', data: { title: 'a' } }]);
   assert.ok(s.deleted.length >= 5);
 });
+
+test('Cloudinary: firma come da documentazione, URL foto accettati', () => {
+  // esempio di cloudinary.com/documentation/authentication_signatures
+  assert.equal(L.cldSign({ eager: 'w_400,h_300,c_pad|w_260,h_200,c_crop', public_id: 'sample_image', timestamp: 1315060510 }, 'abcd'), 'bfd09f95f331f558cbd1320e67aa8d488770583e');
+  assert.ok(L.isPhotoUrl('https://res.cloudinary.com/demo/image/upload/v1731000000/photos/abc123/1731000000000-0a1b2c3d4e.jpg'));
+  assert.ok(L.isPhotoUrl('https://abc.public.blob.vercel-storage.com/photos/abc123/x.jpg'));
+  assert.ok(!L.isPhotoUrl('https://res.cloudinary.com/demo/image/upload/v1/altro/abc123/x.jpg'));
+  assert.ok(!L.isPhotoUrl('https://evil.example/photos/abc123/x.jpg'));
+});

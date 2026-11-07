@@ -39,7 +39,8 @@ const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Miniature: Vercel ridimensiona l'originale e lo converte in AVIF/WebP (decine di KB invece di MB), una volta sola, poi dalla cache.
 // In locale (test) non c'è l'ottimizzatore: originale. Se la miniatura non arriva (es. HEIC) si ripiega sull'originale.
-const mini = (u, w = 640) => /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? u : `/_vercel/image?url=${encodeURIComponent(u)}&w=${w}&q=85`;
+const mini = (u, w = 640) => u.startsWith('https://res.cloudinary.com/') ? u.replace('/image/upload/', `/image/upload/c_limit,w_${w},q_auto,f_auto/`)
+  : /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? u : `/_vercel/image?url=${encodeURIComponent(u)}&w=${w}&q=85`;
 const miniImg = (u, w = 640, lazy = true) => `<img ${lazy ? 'loading="lazy" ' : ''}src="${esc(mini(u, w))}" data-full="${esc(u)}" onerror="this.onerror=null;this.src=this.dataset.full" alt="">`;
 const newId = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-12);
 const items = () => Object.values(S.db.items || {});
@@ -172,11 +173,13 @@ async function prepareFile(file){
   }catch(e){ console.warn('ricompressione non riuscita, uso l\'originale', e); }
   return {blob:file, type};
 }
-function putWithProgress(endpoint, headers, body, onProgress){
+// Permesso con 'fields' (Cloudinary): POST multipart; altrimenti PUT con 'headers' (Vercel Blob).
+function putWithProgress(ticket, body, onProgress){
   return new Promise((res, rej) => {
     const x = new XMLHttpRequest();
-    x.open('PUT', endpoint);
-    for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, v);
+    x.open(ticket.fields ? 'POST' : 'PUT', ticket.endpoint);
+    for (const [k, v] of Object.entries(ticket.headers || {})) x.setRequestHeader(k, v);
+    if (ticket.fields){ const f = new FormData(); for (const [k, v] of Object.entries(ticket.fields)) f.append(k, v); f.append('file', body); body = f; }
     x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
     x.onload = () => {
       if (x.status >= 200 && x.status < 300){ try{ return res(JSON.parse(x.responseText)); }catch{ return rej(new Error('risposta non valida')); } }
@@ -314,10 +317,10 @@ async function uploadOne(u){
   if (!type) throw new Error('formato non supportato');
   const id = u.target.id;
   const ticket = await api('/api/upload', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({item:id, contentType:type, size:blob.size})});
-  const res = await putWithProgress(ticket.endpoint, ticket.headers, blob, (p) => {
+  const res = await putWithProgress(ticket, blob, (p) => {
     u.progress = p; const el = document.querySelector(`[data-up="${u.key}"]`); if (el) el.textContent = Math.round(p * 100) + '%';
   });
-  const photo = {url:res.url, size:blob.size};
+  const photo = {url:res.secure_url || res.url, size:blob.size};
   if (u.target.kind === 'folder' && S.folder && S.folder.id === id){
     S.folder.photos.push({...photo, seq:u.seq});
     S.folder.photos.sort((a, b) => (a.seq || 0) - (b.seq || 0));

@@ -39,9 +39,13 @@ async function uploadQueue() {
         const t = await fetch('/api/upload', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: target.id, contentType: type, size: blob.size }) });
         if (!t.ok) throw new Error('permesso ' + t.status);
         const ticket = await t.json();
-        const up = await fetch(ticket.endpoint, { method: 'PUT', headers: ticket.headers, body: blob });
+        let up;
+        if (ticket.fields) { // Cloudinary: POST multipart, come in app1.js putWithProgress
+          const f = new FormData(); for (const [k, v] of Object.entries(ticket.fields)) f.append(k, v); f.append('file', blob);
+          up = await fetch(ticket.endpoint, { method: 'POST', body: f });
+        } else up = await fetch(ticket.endpoint, { method: 'PUT', headers: ticket.headers, body: blob });
         if (!up.ok) throw new Error('caricamento ' + up.status);
-        const { url } = await up.json();
+        const j = await up.json(), url = j.secure_url || j.url;
         const photo = { url, size: blob.size };
         await fetch('/api/db', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops: [{ op: 'addPhotos', id: target.id, photos: [photo] }], by: 'sfondo' }) });
         await done.put('/done/' + key, new Response(JSON.stringify({ key, target, seq, ...photo }), { headers: { 'content-type': 'application/json' } }));
