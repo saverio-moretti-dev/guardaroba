@@ -4,3 +4,4 @@ node_modules/
 
 # foto e testi scaricati da Vinted (dati personali, repo pubblica)
 vinted-articoli/
+.vercel

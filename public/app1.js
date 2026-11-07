@@ -154,17 +154,21 @@ function fileType(f){
   const ext = ((f.name || '').split('.').pop() || '').toLowerCase();
   return {jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp', heic:'image/heic', heif:'image/heif', avif:'image/avif'}[ext] || (t ? '' : 'image/jpeg');
 }
+// Lato lungo massimo (utente, 2026-11-07): gli originali, fino a 80 MB, riempivano il GB gratuito di Vercel Blob.
+const MAX_SIDE = 2048;
 async function prepareFile(file){
   const type = fileType(file);
   const q = photoQuality();
-  if (q >= 100 || !/^image\/(jpeg|png|webp)$/.test(type)) return {blob:file, type};
+  if (!/^image\/(jpeg|png|webp|heic|heif)$/.test(type)) return {blob:file, type};
   try{
     const bmp = await createImageBitmap(file, {imageOrientation:'from-image'});
-    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
-    c.getContext('2d').drawImage(bmp, 0, 0); if (bmp.close) bmp.close();
-    const out = await new Promise(r => c.toBlob(r, 'image/jpeg', jpegQ(q)));
+    const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    if (k === 1 && q >= 100 && !/hei[cf]/.test(type)){ if (bmp.close) bmp.close(); return {blob:file, type}; }
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height); if (bmp.close) bmp.close();
+    const out = await new Promise(r => c.toBlob(r, 'image/jpeg', Math.min(0.9, jpegQ(q))));
     c.width = c.height = 0;
-    if (out && out.size < file.size) return {blob:out, type:'image/jpeg'};
+    if (out && (k < 1 || out.size < file.size)) return {blob:out, type:'image/jpeg'};
   }catch(e){ console.warn('ricompressione non riuscita, uso l\'originale', e); }
   return {blob:file, type};
 }

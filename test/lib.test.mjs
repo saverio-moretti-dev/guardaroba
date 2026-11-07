@@ -121,6 +121,9 @@ test('writeDb: 40 scritture concorrenti senza perdite + backup giornaliero + rip
   const restored = await L.replaceDb(data, 'S');
   assert.equal(Object.keys(restored.items).length, Object.keys(data.items).length);
   assert.ok((await L.listBackups()).some((b) => b.name.startsWith('prima-del-ripristino')));
+  // importare in un archivio vuoto un backup con rev alto non fa scendere la versione
+  L.setStore(memStore());
+  assert.equal((await L.replaceDb({ items: {}, rev: 487 }, 'S')).rev, 488);
   await assert.rejects(L.readBackup('../../x'), /non valido/);
   await assert.rejects(L.readBackup('inesistente.json'), /non trovato/);
 });

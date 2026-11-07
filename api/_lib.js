@@ -92,7 +92,57 @@ const blobStore = {
     return out;
   },
 };
-let store = blobStore;
+// ---------- Database su Redis (Upstash, piano gratuito: 500.000 comandi/mese) ----------
+// Il database stava su Vercel Blob: ogni salvataggio costava 2–4 scritture e il 6/11/2026 ha esaurito le 2.000
+// del piano gratuito (archivio sospeso, app ferma). Su Redis i salvataggi non consumano scritture Blob:
+// su Blob restano solo le foto (1 scrittura per foto). Redis è coerente: niente copie immutabili né head().
+const REDIS_URL = () => (process.env.KV_REST_API_URL || '').replace(/\/$/, '');
+async function redis(...cmds) { // pipeline: tutti i comandi in un solo giro
+  const r = await fetch(`${REDIS_URL()}/pipeline`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify(cmds),
+  });
+  if (!r.ok) throw new Error(`Redis ${r.status}`);
+  const out = await r.json();
+  for (const x of out) if (x.error) throw new Error(`Redis: ${x.error}`);
+  return out.map((x) => x.result);
+}
+const RK = (p) => `guardaroba:${p}`; // prefisso: il database Redis è condiviso con progetti vecchi
+const RIDX = 'guardaroba:__index'; // pathname -> data di scrittura, per elencare i backup
+// Scrittura condizionata atomica: ARGV[2] = '*' sempre, '' solo se non esiste, altrimenti l'etag atteso.
+const CAS = `local e = redis.call('GET', KEYS[2])
+if ARGV[2] == '' then if e then return 0 end elseif ARGV[2] ~= '*' then if e ~= ARGV[2] then return 0 end end
+redis.call('SET', KEYS[1], ARGV[1]) redis.call('SET', KEYS[2], ARGV[3]) redis.call('ZADD', KEYS[3], ARGV[4], ARGV[5])
+return 1`;
+const redisStore = {
+  async getJson(pathname) {
+    const [[text, etag]] = await redis(['MGET', RK(pathname), `${RK(pathname)}:e`]);
+    return text == null ? null : { data: JSON.parse(text), etag: etag || '' };
+  },
+  async putJson(pathname, obj, { ifMatch, noOverwrite } = {}) {
+    const etag = crypto.randomBytes(8).toString('hex');
+    const want = ifMatch || (noOverwrite ? '' : '*');
+    const [ok] = await redis(['EVAL', CAS, 3, RK(pathname), `${RK(pathname)}:e`, RIDX, JSON.stringify(obj), want, etag, Date.now(), pathname]);
+    if (ok !== 1) throw new Conflict();
+  },
+  async del(urls) {
+    const keys = urls.filter((u) => u.startsWith('redis:')).map((u) => u.slice(6));
+    if (keys.length) await redis(...keys.flatMap((p) => [['DEL', RK(p), `${RK(p)}:e`], ['ZREM', RIDX, p]]));
+    await blobStore.del(urls.filter((u) => !u.startsWith('redis:'))); // foto: del() su Blob è gratuita
+  },
+  async list(prefix) {
+    const [flat] = await redis(['ZRANGE', RIDX, 0, -1, 'WITHSCORES']);
+    const rows = [];
+    for (let i = 0; i < flat.length; i += 2) if (flat[i].startsWith(prefix)) rows.push({ pathname: flat[i], uploadedAt: Number(flat[i + 1]) });
+    if (!rows.length) return [];
+    const sizes = await redis(...rows.map((r) => ['STRLEN', RK(r.pathname)]));
+    return rows.map((r, i) => ({ ...r, url: `redis:${r.pathname}`, size: sizes[i] }));
+  },
+};
+
+let store = process.env.KV_REST_API_URL ? redisStore : blobStore;
+const onBlob = () => store === blobStore; // solo su Blob i salvataggi consumano scritture del piano gratuito
 export const setStore = (s) => { store = s; memo = null; memoText = null; };
 export { Conflict };
 
@@ -140,8 +190,11 @@ function normalize(db) {
   return db;
 }
 
-export async function readDb({ fresh = false } = {}) {
+export async function readDb({ fresh = false, allowEmpty = false } = {}) {
   const r = await store.getJson(DB_PATH(), { fresh });
+  // Redis vuoto (database appena spostato da Blob): rifiutare invece di mostrare e salvare un archivio vuoto,
+  // che sul telefono sostituirebbe la copia locale. Si riempie con Impostazioni → Importa (replaceDb).
+  if (!r && store === redisStore && !allowEmpty) throw new Error('Database da ripristinare: Impostazioni → Importa un backup');
   if (!r) return { db: normalize(memo ? structuredClone(memo) : emptyDb()), etag: null };
   const db = normalize(r.data);
   if (!memo || db.rev >= memo.rev) memo = db;
@@ -175,8 +228,8 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
     const { db, etag } = await readDb({ fresh: true });
     const before = structuredClone(db);
     const purge = applyOps(db, ops, by, now);
-    let extra = 2; // copia immutabile + file principale
-    if (await dailyBackup(before)) { db.backupDay = day(now); extra += 2; } // backup + elenco per la pulizia
+    let extra = onBlob() ? 2 : 0; // copia immutabile + file principale
+    if (await dailyBackup(before)) { db.backupDay = day(now); if (onBlob()) extra += 2; } // backup + elenco per la pulizia
     db.rev = (db.rev || 0) + 1;
     db.savedAt = now;
     const snap = applyUsage(db, extra, now);
@@ -188,7 +241,7 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
       return db;
     } catch (e) {
       if (!(e instanceof Conflict)) throw e;
-      countOp('adv', 2); // anche un tentativo rifiutato consuma le scritture
+      if (onBlob()) countOp('adv', 2); // anche un tentativo rifiutato consuma le scritture
       await new Promise((r) => setTimeout(r, Math.min(2000, 80 * (attempt + 1)) * (0.5 + Math.random())));
     }
   }
@@ -199,19 +252,20 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
 export async function replaceDb(data, by) {
   const clean = sanitizeImport(data);
   for (let attempt = 0; attempt < 6; attempt++) {
-    const { db, etag } = await readDb({ fresh: true });
+    const { db, etag } = await readDb({ fresh: true, allowEmpty: true });
     await saveSnapshot(db, 'prima-del-ripristino');
     // Le foto che il ripristino non usa più non vengono perse subito: entrano in eliminazione differita.
     const used = referencedUrls(clean);
     const queued = new Map((db.purgeQueue || []).map((q) => [q.url, q]));
     for (const p of allPhotos(db)) if (!used.has(p.url) && !queued.has(p.url)) queued.set(p.url, { url: p.url, size: p.size, due: Date.now() + GRACE_DAYS * 864e5 });
     clean.purgeQueue = [...queued.values()].filter((q) => !used.has(q.url));
-    clean.rev = (db.rev || 0) + 1;
+    // il numero di versione non scende mai: i telefoni scartano come «vecchia» una risposta con rev più basso
+    clean.rev = Math.max(db.rev || 0, Number(data && data.rev) || 0) + 1;
     clean.savedAt = Date.now();
     clean.backupDay = db.backupDay;
     clean.restoredBy = by || '';
     clean.usage = db.usage;
-    const snap = applyUsage(clean, 3, Date.now());
+    const snap = applyUsage(clean, onBlob() ? 3 : 0, Date.now());
     try {
       await store.putJson(DB_PATH(), clean, { versioned: true, ...(etag ? { ifMatch: etag } : { noOverwrite: true }) });
       clearUsage(snap);
@@ -225,7 +279,7 @@ export async function replaceDb(data, by) {
 }
 
 export async function listBackups() {
-  countOp('adv');
+  if (onBlob()) countOp('adv');
   const all = await store.list(BACKUP_PREFIX());
   return all
     .map((b) => ({ name: b.pathname.slice(BACKUP_PREFIX().length), size: b.size, at: b.uploadedAt }))

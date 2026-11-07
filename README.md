@@ -4,7 +4,7 @@ App web installabile (PWA) per preparare, tracciare e pubblicare le vendite di a
 La uso ogni giorno in due, da due telefoni diversi, sullo stesso archivio.
 
 *English: a shared PWA to prepare and track second-hand clothing listings. Vanilla JS front end, Node
-serverless functions on Vercel, Vercel Blob storage with conditional writes, an offline queue and tests.*
+serverless functions on Vercel, Redis (Upstash) with conditional writes, Vercel Blob for photos, an offline queue and tests.*
 
 ## Il problema
 Vinted non ha API pubbliche. Preparare un annuncio vuol dire scattare le foto, scegliere marca, taglia,
@@ -24,11 +24,14 @@ su decine di capi, le schede si perdono, si duplicano e nessuno sa a che punto �
 | --- | --- | --- |
 | Frontend | HTML + JavaScript senza framework, service worker | si apre all'istante sul telefono, funziona anche offline |
 | Backend | funzioni serverless Node su Vercel (`api/`) | nessun server da mantenere, costo zero |
-| Dati | un file JSON su Vercel Blob con **scritture condizionate** | due persone salvano insieme senza sovrascriversi |
-| Foto | caricate dal telefono direttamente sull'archivio, con permesso per singola foto | nessun limite di dimensione delle funzioni, originali identici byte per byte |
+| Dati | un JSON su Redis (Upstash, piano gratuito) con **scritture condizionate** atomiche | due persone salvano insieme senza sovrascriversi; i salvataggi non consumano le scritture di Blob |
+| Foto | rimpicciolite sul telefono (lato lungo 2048 px) e caricate direttamente su Vercel Blob, con permesso per singola foto | nessun limite di dimensione delle funzioni; 1 scrittura Blob per foto |
 | Offline | coda persistente sul telefono | foto e modifiche non si perdono se cade la rete o si chiude l'app |
 
 ## Problemi veri risolti
+- **Archivio sospeso per troppe scritture (novembre 2026).** Il database stava su Vercel Blob: ogni salvataggio
+  costava 2–4 scritture e il piano gratuito (2.000 al mese) è finito in pochi giorni. Il database è passato su
+  Redis; su Blob restano solo le foto, rimpicciolite prima del caricamento (gli originali riempivano 1 GB).
 - **Salvataggi "offline" anche online.** Le letture di Vercel Blob possono restituire per minuti una versione
   vecchia di un file sovrascritto. Ho spostato la versione autorevole su `head()` (sempre aggiornata) e
   scrivo una copia immutabile per ogni versione: le letture non sono più ambigue.
@@ -53,7 +56,8 @@ pretendere test e prove prima di ogni rilascio, diagnosticare i guasti in produz
 verificarne la correzione. È lo stesso metodo che uso sui progetti di lavoro.
 
 ## Configurazione
-Variabili d'ambiente su Vercel: `BLOB_READ_WRITE_TOKEN` (store Blob collegato al progetto) e `APP_CODE`
+Variabili d'ambiente su Vercel: `KV_REST_API_URL` e `KV_REST_API_TOKEN` (database Upstash collegato al progetto;
+senza, il database torna su Blob), `BLOB_READ_WRITE_TOKEN` (store Blob per le foto) e `APP_CODE`
 (chiave privata da cui si ricava il percorso dei dati).
 
 **Nota**: l'app è pensata per un piccolo gruppo di persone di fiducia e l'accesso è libero per chi conosce
