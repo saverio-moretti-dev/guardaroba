@@ -123,10 +123,12 @@ function scheduleFlush(ms=700){ clearTimeout(flushT); flushT = setTimeout(flush,
 async function flush(){
   if (S.saving || !S.ops.length) return;
   S.saving = true; updateSaveBar();
-  const ops = S.ops; S.ops = [];
+  const ops = S.ops.slice(0, 100); S.ops = S.ops.slice(100); // a pezzi: il server ne accetta al massimo 500 per volta
   LS.set('opsSending', ops); // in volo: se la pagina si chiude ora, al riavvio vengono rimandate (il server ignora i duplicati)
   try{
-    const db = await api('/api/db', {method:'POST', keepalive:true, headers:{'content-type':'application/json'}, body:JSON.stringify({ops, by:S.me})});
+    const body = JSON.stringify({ops, by:S.me});
+    // keepalive oltre ~64 KB fa fallire la richiesta prima di partire (limite dei browser): solo per invii piccoli
+    const db = await api('/api/db', {method:'POST', keepalive:body.length < 60000, headers:{'content-type':'application/json'}, body});
     S.saveErr = false;
     // Ri-applica eventuali modifiche fatte durante il salvataggio
     for (const op of S.ops) applyOpOn(db, op);
