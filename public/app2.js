@@ -103,7 +103,10 @@ function viewItems(){
   else if (S.filter === 'crea') list = list.filter(i => stepIndex(i.status) === 0);
   else if (S.filter !== 'tutti') list = list.filter(i => i.status === S.filter);
   if (q) list = list.filter(i => [i.title, i.brand, i.category, i.size, i.owner, i.location, i.notes].join(' ').toLowerCase().includes(q));
-  list.sort((a,b) => (b.updatedAt||b.createdAt) - (a.updatedAt||a.createdAt));
+  // Ordine fissato all'ultimo render chiesto dall'utente: un aggiornamento in background non sposta le righe sotto il dito (le schede nuove vanno in fondo)
+  if (!S.bgRender || !S.rank) S.rank = new Map(items().map(i => [i.id, i.updatedAt||i.createdAt]));
+  const rk = (i) => S.rank.get(i.id) || 0;
+  list.sort((a,b) => rk(b) - rk(a));
   const all = items();
   const sold = all.filter(i => i.status === 'venduto');
   const incasso = sold.reduce((s,i) => s + num(i.soldPrice || i.price), 0);

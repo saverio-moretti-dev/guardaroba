@@ -74,7 +74,7 @@ function setDb(db){
   if (db.rev < (S.db.rev || 0)) return; // risposta vecchia (cache): ignora
   const changed = db.rev !== S.db.rev;
   S.db = db; LS.set('dbCache', db);
-  if (changed) refresh();
+  if (changed){ S.bgRender = true; try{ refresh(); } finally{ S.bgRender = false; } }
 }
 async function pull(){
   if (!S.authed || document.hidden || S.ops.length || S.saving) return;
