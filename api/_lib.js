@@ -6,8 +6,7 @@ const secret = () => process.env.APP_CODE || 'x';
 const hmac = (s) => crypto.createHmac('sha256', secret()).update(s).digest('hex');
 
 // ---------- Accesso con codice condiviso ----------
-export function authed() { return true; }
-export function authedWithCode(req) {
+export function authed(req) {
   const m = /(?:^|;\s*)sess=([a-f0-9]+)/.exec(req.headers.cookie || '');
   if (!m) return false;
   const a = Buffer.from(m[1]);
@@ -15,9 +14,11 @@ export function authedWithCode(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// Controllo con codice disattivato: authedWithCode e /api/login restano pronti per riattivarlo.
-export function guard() {
-  return true;
+export function guard(req, res) {
+  if (authed(req)) return true;
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(401).json({ error: 'non autorizzato' });
+  return false;
 }
 
 export const sessionCookie = () =>

@@ -8,7 +8,8 @@ I venduti e le bozze di Vinted non si riportano.
 - Chrome con il proprio account Vinted già aperto. Gli script di raccolta girano nella pagina, nel browser
   dell'utente: nessuna password viene letta o salvata.
 - Un file `.env.local` nella radice della repo (escluso da git) con l'indirizzo dell'app (`APP_URL`) e quello
-  del proprio profilo Vinted (`VINTED_PROFILE`). Entrambi restano fuori dalla repo pubblica.
+  del proprio profilo Vinted (`VINTED_PROFILE`), più il codice d'accesso dell'app (`APP_CODE`, lo stesso impostato su
+  Vercel): senza, le API dell'archivio rispondono 401. Tutti restano fuori dalla repo pubblica.
 - La cartella `vinted-articoli/` (esclusa da git) dove finiscono testi e foto scaricati.
 
 ## Allineamento in cinque passi

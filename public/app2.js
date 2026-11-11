@@ -302,6 +302,11 @@ function settingsSheet(){
   const nTrash = Object.keys((S.db.trash || {}).items || {}).length + ((S.db.trash || {}).photos || []).length;
   const opt = (key, list, cur) => `<div class="chips">${list.map(([v,l]) => `<button type="button" class="chip ${String(cur)===String(v)?'on':''}" data-sopt="${key}" data-v="${v}">${l}</button>`).join('')}</div>`;
   const s = sheet(`<h3>Impostazioni</h3>
+    <div class="sec"><h4>Attivazione</h4>
+      ${S.authed
+        ? `<div class="row"><span class="grow">Attiva ✓</span><button class="btn" data-a="logout" style="min-height:40px">Disattiva</button></div>`
+        : `<div class="two"><input class="t" id="s_code" placeholder="Codice" autocapitalize="off" autocorrect="off" autocomplete="off"><button class="btn primary" data-a="activate">Attiva</button></div><div id="s_err" class="err" style="margin-top:6px"></div>`}
+    </div>
     <div class="sec"><h4>Tu</h4>
       <input class="t" id="s_me" placeholder="Il tuo nome" value="${esc(S.me)}">
     </div>
@@ -501,7 +506,8 @@ async function start(){
 (async function boot(){
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
   applyTheme();
-  S.authed = true;
+  try{ const r = await fetch('/api/me', {credentials:'same-origin'}); S.authed = (await r.json()).ok; }
+  catch{ S.authed = !!S.db.rev; } // offline: usa la copia locale
   start();
   setInterval(pull, 20000);
 })();

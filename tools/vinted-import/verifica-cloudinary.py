@@ -1,12 +1,14 @@
 # Verifica dopo foto-cloudinary.mjs: per ogni articolo delle mappe in vinted-articoli/, l'app ha esattamente
 # le URL nuove nell'ordine della mappa (stesso numero delle vecchie) e ogni foto risponde 200 image/* con i byte giusti.
 # Avvio dalla radice della repo: python3 tools/vinted-import/verifica-cloudinary.py
-import json, glob, os, urllib.request
+import json, glob, os, urllib.request, hmac, hashlib
 
 APP = next(l.split('=', 1)[1].strip() for l in open('.env.local') if l.startswith('APP_URL='))
+ENV = dict(l.strip().split('=', 1) for l in open('.env.local') if '=' in l)
+COOKIE = 'sess=' + hmac.new(ENV.get('APP_CODE', '').encode(), b'session-v1', hashlib.sha256).hexdigest()  # le API vogliono la sessione
 m = {}
 for f in sorted(glob.glob('vinted-articoli/_foto-cloudinary-*.json')): m.update(json.load(open(f)))
-db = json.load(urllib.request.urlopen(APP + '/api/db'))
+db = json.load(urllib.request.urlopen(urllib.request.Request(APP + '/api/db', headers={'Cookie': COOKIE})))
 bad = 0
 for i, e in m.items():
     app = [p['url'] for p in db['items'][i]['photos']]

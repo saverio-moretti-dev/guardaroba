@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '../..');
 try { process.loadEnvFile(join(REPO, '.env.local')); } catch {} // APP_URL sta qui: la repo è pubblica
 const APP = process.env.APP_URL;
+// Le API vogliono il cookie di sessione: si ricava da APP_CODE (in .env.local, come su Vercel).
+const COOKIE = `sess=${(await import('node:crypto')).createHmac('sha256', process.env.APP_CODE || '').update('session-v1').digest('hex')}`;
 if (!APP) throw new Error('manca APP_URL in .env.local');
 const DIR = process.env.VINTED_DIR || join(REPO, 'vinted-articoli');
 const args = process.argv.slice(2);
@@ -19,7 +21,7 @@ const only = args.includes('--only') ? new Set(args[args.indexOf('--only') + 1].
 const undoFile = args.includes('--undo') ? args[args.indexOf('--undo') + 1] : null;
 
 async function api(path, body) {
-  const r = await fetch(APP + path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const r = await fetch(APP + path, body ? { method: 'POST', headers: { 'content-type': 'application/json', cookie: COOKIE }, body: JSON.stringify(body) } : { headers: { cookie: COOKIE } });
   if (!r.ok) throw new Error(`${path} ${r.status} ${await r.text()}`);
   return r.json();
 }

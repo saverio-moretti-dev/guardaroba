@@ -21,6 +21,7 @@ await page.route('**/*', (r) => {
   const u = new URL(r.request().url());
   if (u.hostname !== 'guardaroba.test') return r.abort(); // immagini Cloudinary/Blob: misure fisse in CSS, non servono
   if (u.pathname === '/api/db') return r.fulfill({ json: db });
+  if (u.pathname === '/api/me') return r.fulfill({ json: { ok: true } });
   if (u.pathname.startsWith('/api/')) return r.fulfill({ json: {} });
   const f = path.join(PUB, u.pathname === '/' ? 'index.html' : u.pathname);
   return fs.existsSync(f) ? r.fulfill({ path: f }) : r.fulfill({ status: 404, body: '' });
