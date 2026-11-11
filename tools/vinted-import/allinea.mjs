@@ -86,9 +86,13 @@ for (const v of elenco.items) {
     const buf = await readFile(join(f.dir, name));
     const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
     const t = await api('/api/upload', { item: id, contentType: type, size: buf.length });
-    const r = await fetch(t.endpoint, { method: 'PUT', headers: t.headers, body: buf });
-    if (!r.ok) throw new Error(`foto ${name} rifiutata (${r.status}) in ${f.name}`);
-    uploaded.push({ url: (await r.json()).url, size: buf.length });
+    // Cloudinary (fields → POST multipart) o Blob (headers → PUT), come foto-cloudinary.mjs
+    let r;
+    if (t.fields) { const fd = new FormData(); for (const [k, v] of Object.entries(t.fields)) fd.append(k, v); fd.append('file', new Blob([buf], { type })); r = await fetch(t.endpoint, { method: 'POST', body: fd }); }
+    else r = await fetch(t.endpoint, { method: 'PUT', headers: t.headers, body: buf });
+    if (!r.ok) throw new Error(`foto ${name} rifiutata (${r.status} ${await r.text()}) in ${f.name}`);
+    const j = await r.json();
+    uploaded.push({ url: j.secure_url || j.url, size: buf.length });
   }
   // un solo salvataggio per articolo; le foto vecchie sostituite vanno nel cestino dell'app (30 giorni)
   const ops = [{ op: 'upsert', id, data: it ? want : { ...want, owner: '' } }];
