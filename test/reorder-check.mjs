@@ -46,10 +46,16 @@ const opened = await page.evaluate(() => S.view === 'edit' ? S.editId : null);
 const ok = rev === db.rev && opened === target.id && !errors.length;
 console.log(`${ok ? 'PASS' : 'FAIL'}  tocco dopo aggiornamento apre la riga toccata — atteso ${target.id}, aperto ${opened}, rev ${rev}/${db.rev}${errors.length ? ', errori: ' + errors.join(' | ') : ''}`);
 
+// «indietro» dalla scheda: la lista torna allo stesso punto e allo stesso ordine, sotto il dito c'è la stessa riga
+await page.goBack(); await page.waitForTimeout(200);
+const under = await page.evaluate(({ x, y }) => { const b = document.elementFromPoint(x, y); return { y: scrollY, id: b && b.closest('[data-open]') && b.closest('[data-open]').dataset.open }; }, target);
+const ok3 = under.y === 400 && under.id === target.id;
+console.log(`${ok3 ? 'PASS' : 'FAIL'}  indietro torna allo stesso punto — scrollY ${under.y}/400, sotto il dito ${under.id}, atteso ${target.id}`);
+
 // tornando alla lista (azione dell'utente) l'ordine si aggiorna: la scheda modificata va in cima
 await page.evaluate(() => go('items')); await page.waitForTimeout(100);
 const first = await page.$eval('.list .it', (b) => b.dataset.open);
 const ok2 = first === moved;
 console.log(`${ok2 ? 'PASS' : 'FAIL'}  dopo una navigazione l'ordine si aggiorna — prima riga ${first}, attesa ${moved}`);
 await browser.close();
-process.exit(ok && ok2 ? 0 : 1);
+process.exit(ok && ok2 && ok3 ? 0 : 1);

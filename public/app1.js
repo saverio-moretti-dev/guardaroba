@@ -561,6 +561,7 @@ function updateSaveBar(){
   else el.textContent = 'Salvato ✓';
 }
 function go(view, id){
+  if (['foto','items','publish'].includes(S.view) && (view === 'edit' || view === 'copy')) S.listY = window.scrollY;
   S.view = view; if (id !== undefined) S.editId = id;
   if (['foto','items','publish'].includes(view)) LS.set('view', view);
   render(); window.scrollTo(0, 0);
@@ -573,9 +574,13 @@ function backToList(){
   if (steps) history.go(-steps); else go(LS.get('view','items'));
 }
 function openEdit(id){ S.sel = null; go('edit', id); }
+history.scrollRestoration = 'manual'; // la posizione la rimette popstate: il browser la riporterebbe a 0 (salvata dopo lo scrollTo di go)
 window.addEventListener('popstate', () => {
   const st = history.state || {};
   if ((st.v === 'edit' || st.v === 'copy') && S.db.items[st.id]){ S.view = st.v; S.editId = st.id; }
   else S.view = LS.get('view', 'items');
-  render(); window.scrollTo(0, 0);
+  // Tornando dalla scheda la lista riappare com'era (stesso punto, stesso ordine): niente righe spostate sotto il dito
+  const back = !['edit','copy'].includes(S.view);
+  S.bgRender = back; try{ render(); } finally{ S.bgRender = false; }
+  window.scrollTo(0, back ? S.listY || 0 : 0);
 });
