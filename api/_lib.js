@@ -76,6 +76,12 @@ async function redis(...cmds) { // pipeline: tutti i comandi in un solo giro
   for (const x of out) if (x.error) throw new Error(`Redis: ${x.error}`);
   return out.map((x) => x.result);
 }
+// Solo numeri per /api/salute (mai chiavi). Upstash via REST non dà i comandi del mese: quelli si stimano.
+export async function redisHealth() {
+  const [size, info] = await redis(['DBSIZE'], ['INFO', 'memory']);
+  const mem = /used_memory:(\d+)/.exec(String(info || ''));
+  return { keys: size, memoryBytes: mem ? Number(mem[1]) : null };
+}
 const RK = (p) => `guardaroba:${p}`; // prefisso: il database Redis è condiviso con progetti vecchi
 const RIDX = 'guardaroba:__index'; // pathname -> data di scrittura, per elencare i backup
 // Scrittura condizionata atomica: ARGV[2] = '*' sempre, '' solo se non esiste, altrimenti l'etag atteso.

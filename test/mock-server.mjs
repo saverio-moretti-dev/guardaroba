@@ -12,7 +12,7 @@ process.env.APP_CODE ||= '6gfy6gbx';
 
 const L = await import(path.join(ROOT, 'api/_lib.js'));
 const handlers = {};
-for (const n of ['db', 'backup', 'login', 'logout', 'me']) handlers[n] = (await import(path.join(ROOT, `api/${n}.js`))).default;
+for (const n of ['db', 'backup', 'login', 'logout', 'me', 'salute']) handlers[n] = (await import(path.join(ROOT, `api/${n}.js`))).default;
 
 // ---- archivio in memoria ----
 const files = new Map(); // pathname -> {body:Buffer, type, etag, at}
