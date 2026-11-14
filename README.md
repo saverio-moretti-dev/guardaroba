@@ -60,7 +60,7 @@ verificarne la correzione. È lo stesso metodo che uso sui progetti di lavoro.
 
 ## Configurazione
 Variabili d'ambiente su Vercel: `KV_REST_API_URL` e `KV_REST_API_TOKEN` (database Upstash collegato al progetto;
-senza, il database torna su Blob), `CLOUDINARY_URL` (`cloudinary://<key>:<secret>@<cloud>`: foto nuove su Cloudinary, gratis senza carta; senza, vanno su Blob), `BLOB_READ_WRITE_TOKEN` (store Blob delle foto vecchie) e `APP_CODE`
+obbligatorie: senza, l'app si ferma con un errore chiaro), `CLOUDINARY_URL` (`cloudinary://<key>:<secret>@<cloud>`, unico deposito foto, obbligatorio) e `APP_CODE`
 (chiave privata da cui si ricava il percorso dei dati).
 
 ## Licenza

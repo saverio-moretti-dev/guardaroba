@@ -37,10 +37,9 @@ const S = {
 };
 const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-// Miniature: Vercel ridimensiona l'originale e lo converte in AVIF/WebP (decine di KB invece di MB), una volta sola, poi dalla cache.
-// In locale (test) non c'è l'ottimizzatore: originale. Se la miniatura non arriva (es. HEIC) si ripiega sull'originale.
-const mini = (u, w = 640) => u.startsWith('https://res.cloudinary.com/') ? u.replace('/image/upload/', `/image/upload/c_limit,w_${w},q_auto,f_auto/`)
-  : /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? u : `/_vercel/image?url=${encodeURIComponent(u)}&w=${w}&q=85`;
+// Miniature fatte da Cloudinary (decine di KB invece di MB). Altri URL (test locali): originale.
+// Se la miniatura non arriva (es. HEIC) si ripiega sull'originale.
+const mini = (u, w = 640) => u.startsWith('https://res.cloudinary.com/') ? u.replace('/image/upload/', `/image/upload/c_limit,w_${w},q_auto,f_auto/`) : u;
 const miniImg = (u, w = 640, lazy = true) => `<img ${lazy ? 'loading="lazy" ' : ''}src="${esc(mini(u, w))}" data-full="${esc(u)}" onerror="this.onerror=null;this.src=this.dataset.full" alt="">`;
 const newId = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-12);
 const items = () => Object.values(S.db.items || {});
@@ -175,7 +174,7 @@ async function prepareFile(file){
   }catch(e){ console.warn('ricompressione non riuscita, uso l\'originale', e); }
   return {blob:file, type};
 }
-// Permesso con 'fields' (Cloudinary): POST multipart; altrimenti PUT con 'headers' (Vercel Blob).
+// Permesso con 'fields' (Cloudinary): POST multipart; PUT con 'headers' resta solo per il server di prova.
 function putWithProgress(ticket, body, onProgress){
   return new Promise((res, rej) => {
     const x = new XMLHttpRequest();

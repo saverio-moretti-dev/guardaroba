@@ -1,19 +1,39 @@
 {
-  "regions": ["fra1"],
-  "images": {
-    "sizes": [256, 640],
-    "qualities": [85],
-    "formats": ["image/avif", "image/webp"],
-    "minimumCacheTTL": 2678400,
-    "remotePatterns": [{ "protocol": "https", "hostname": "^[a-z0-9]+\\.public\\.blob\\.vercel-storage\\.com$", "pathname": "^/photos/.*$" }]
-  },
+  "regions": [
+    "fra1"
+  ],
   "rewrites": [
-    { "source": "/icon-192.png", "destination": "/api/icon?s=192" },
-    { "source": "/icon-512.png", "destination": "/api/icon?s=512" },
-    { "source": "/icon-maskable-512.png", "destination": "/api/icon?s=512&m=1" }
+    {
+      "source": "/icon-192.png",
+      "destination": "/api/icon?s=192"
+    },
+    {
+      "source": "/icon-512.png",
+      "destination": "/api/icon?s=512"
+    },
+    {
+      "source": "/icon-maskable-512.png",
+      "destination": "/api/icon?s=512&m=1"
+    }
   ],
   "headers": [
-    { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
-    { "source": "/(|app1.js|app2.js|app3.js)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "source": "/(|app1.js|app2.js|app3.js)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    }
   ]
 }

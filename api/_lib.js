@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { get, head, put, del, list, BlobPreconditionFailedError } from '@vercel/blob';
 
 // 'x' serve solo ai test locali: in produzione APP_CODE è impostato su Vercel (README § Configurazione).
 const secret = () => process.env.APP_CODE || 'x';
@@ -30,74 +29,12 @@ export function codeOk(code) {
   return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// ---------- Archivio: interfaccia sostituibile (Vercel Blob in produzione, memoria nei test) ----------
+// ---------- Archivio: interfaccia sostituibile (Redis in produzione, memoria nei test) ----------
 class Conflict extends Error {}
 
-const blobStore = {
-  // Le sovrascritture di un file pubblico possono restare vecchie in lettura anche per minuti.
-  // Per questo: l'etag vero viene da head() (sempre aggiornato) e il contenuto da una copia
-  // immutabile data/<file>.v/<md5>.json, scritta prima di ogni salvataggio (l'etag è l'md5 del contenuto).
-  async getJson(pathname, { fresh = false } = {}) {
-    if (!fresh) {
-      const r = await get(pathname, { access: 'public' });
-      if (!r || r.statusCode !== 200) return null;
-      return { data: JSON.parse(await new Response(r.stream).text()), etag: r.blob.etag };
-    }
-    let h;
-    countOp('simple');
-    try { h = await head(pathname); } catch (e) { if (/not.?found/i.test(String(e.message)) || e.name === 'BlobNotFoundError') return null; throw e; }
-    const etag = h.etag;
-    const want = String(etag).replace(/^W\//, '').replace(/"/g, '');
-    const md5 = (t) => crypto.createHash('md5').update(t).digest('hex');
-    if (memoText && md5(memoText) === want) return { data: JSON.parse(memoText), etag };
-    const v = await get(`${pathname}.v/${want}.json`, { access: 'public' }).catch(() => null);
-    if (v && v.statusCode === 200) { const t = await new Response(v.stream).text(); if (md5(t) === want) return { data: JSON.parse(t), etag }; }
-    const r = await get(pathname, { access: 'public' });
-    const t = r && r.statusCode === 200 ? await new Response(r.stream).text() : null;
-    if (t && md5(t) === want) return { data: JSON.parse(t), etag };
-    // Copia non ancora leggibile: si usa la più recente disponibile, ma si scrive contro l'etag vero.
-    const best = [t, memoText].filter(Boolean).map((x) => JSON.parse(x)).sort((a, b) => (b.rev || 0) - (a.rev || 0))[0];
-    if (!best) throw new Error('dati non leggibili, riprova');
-    return { data: best, etag, stale: true };
-  },
-  async putJson(pathname, obj, { ifMatch, noOverwrite, cacheMaxAge = 60, versioned = false } = {}) {
-    const text = JSON.stringify(obj);
-    if (versioned) {
-      const md5 = crypto.createHash('md5').update(text).digest('hex');
-      await put(`${pathname}.v/${md5}.json`, text, { access: 'public', addRandomSuffix: false, contentType: 'application/json', cacheControlMaxAge: 31536000, allowOverwrite: true });
-    }
-    try {
-      await put(pathname, text, {
-        access: 'public',
-        addRandomSuffix: false,
-        contentType: 'application/json',
-        cacheControlMaxAge: cacheMaxAge,
-        ...(ifMatch ? { ifMatch } : noOverwrite ? { allowOverwrite: false } : { allowOverwrite: true }),
-      });
-    } catch (e) {
-      if (e instanceof BlobPreconditionFailedError || /already exists|precondition/i.test(String(e.message))) throw new Conflict();
-      throw e;
-    }
-  },
-  async del(urls) {
-    const [cld, blob] = [urls.filter((u) => CLD_RE.test(u)), urls.filter((u) => !CLD_RE.test(u))];
-    if (cld.length) await cldDelete(cld);
-    if (blob.length) await del(blob);
-  },
-  async list(prefix) {
-    const out = [];
-    let cursor;
-    do {
-      const r = await list({ prefix, cursor, limit: 1000 });
-      out.push(...r.blobs.map((b) => ({ pathname: b.pathname, url: b.url, size: b.size, uploadedAt: new Date(b.uploadedAt).getTime() })));
-      cursor = r.hasMore ? r.cursor : undefined;
-    } while (cursor);
-    return out;
-  },
-};
 // ---------- Foto su Cloudinary (piano gratuito, senza carta) ----------
-// Vercel Blob Hobby ha sospeso lo store foto il 6/11/2026: con CLOUDINARY_URL impostato le foto nuove vanno su
-// Cloudinary; quelle vecchie su Blob restano valide. Formato del pannello: cloudinary://<key>:<secret>@<cloud>
+// Unico deposito foto. Vercel Blob (store sospeso dal 6/11/2026 per quota) non si usa più: niente ripieghi.
+// Formato del pannello: cloudinary://<key>:<secret>@<cloud>
 export function cloudinary() {
   const raw = process.env.CLOUDINARY_URL;
   if (!raw) return null;
@@ -160,7 +97,9 @@ const redisStore = {
   async del(urls) {
     const keys = urls.filter((u) => u.startsWith('redis:')).map((u) => u.slice(6));
     if (keys.length) await redis(...keys.flatMap((p) => [['DEL', RK(p), `${RK(p)}:e`], ['ZREM', RIDX, p]]));
-    await blobStore.del(urls.filter((u) => !u.startsWith('redis:'))); // foto: del() su Blob è gratuita
+    const cld = urls.filter((u) => CLD_RE.test(u));
+    if (cld.length) await cldDelete(cld);
+    // URL Blob: lo store è sospeso e le foto non sono più raggiungibili, si lasciano cadere
   },
   async list(prefix) {
     const [flat] = await redis(['ZRANGE', RIDX, 0, -1, 'WITHSCORES']);
@@ -172,8 +111,8 @@ const redisStore = {
   },
 };
 
-let store = process.env.KV_REST_API_URL ? redisStore : blobStore;
-const onBlob = () => store === blobStore; // solo su Blob i salvataggi consumano scritture del piano gratuito
+const noStore = new Proxy({}, { get: () => async () => { throw new Error('KV_REST_API_URL mancante: archivio Redis non configurato'); } });
+let store = process.env.KV_REST_API_URL ? redisStore : noStore;
 export const setStore = (s) => { store = s; memo = null; memoText = null; };
 export { Conflict };
 
@@ -259,8 +198,8 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
     const { db, etag } = await readDb({ fresh: true });
     const before = structuredClone(db);
     const purge = applyOps(db, ops, by, now);
-    let extra = onBlob() ? 2 : 0; // copia immutabile + file principale
-    if (await dailyBackup(before)) { db.backupDay = day(now); if (onBlob()) extra += 2; } // backup + elenco per la pulizia
+    const extra = 0;
+    if (await dailyBackup(before)) { db.backupDay = day(now); }
     db.rev = (db.rev || 0) + 1;
     db.savedAt = now;
     const snap = applyUsage(db, extra, now);
@@ -272,7 +211,6 @@ export async function writeDb(ops, by, { now = Date.now() } = {}) {
       return db;
     } catch (e) {
       if (!(e instanceof Conflict)) throw e;
-      if (onBlob()) countOp('adv', 2); // anche un tentativo rifiutato consuma le scritture
       await new Promise((r) => setTimeout(r, Math.min(2000, 80 * (attempt + 1)) * (0.5 + Math.random())));
     }
   }
@@ -296,7 +234,7 @@ export async function replaceDb(data, by) {
     clean.backupDay = db.backupDay;
     clean.restoredBy = by || '';
     clean.usage = db.usage;
-    const snap = applyUsage(clean, onBlob() ? 3 : 0, Date.now());
+    const snap = applyUsage(clean, 0, Date.now());
     try {
       await store.putJson(DB_PATH(), clean, { versioned: true, ...(etag ? { ifMatch: etag } : { noOverwrite: true }) });
       clearUsage(snap);
@@ -310,7 +248,6 @@ export async function replaceDb(data, by) {
 }
 
 export async function listBackups() {
-  if (onBlob()) countOp('adv');
   const all = await store.list(BACKUP_PREFIX());
   return all
     .map((b) => ({ name: b.pathname.slice(BACKUP_PREFIX().length), size: b.size, at: b.uploadedAt }))
@@ -332,6 +269,8 @@ const ITEM_FIELDS = [
 const SETTINGS_KEYS = ['vintedProfile', 'redripNote', 'defaultParcel', 'descFooter', 'hashtags'];
 
 const isId = (s) => typeof s === 'string' && /^[a-z0-9]{6,16}$/.test(s);
+// Gli URL Blob restano validi solo finché le 141 foto perse non vengono tolte dalle schede (passo A2):
+// toglierli da qui adesso le cancellerebbe in silenzio al primo salvataggio.
 const PHOTO_RE = /^https:\/\/(?:[a-z0-9.-]+\.public\.blob\.vercel-storage\.com|res\.cloudinary\.com\/[a-z0-9_-]+\/image\/upload\/v\d+)\/photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/i;
 let photoRe = PHOTO_RE;
 export const setPhotoPattern = (re) => { photoRe = re; };

@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { generateClientTokenFromReadWriteToken } from '@vercel/blob/client';
 import { guard, countOp, cloudinary, cldSign } from './_lib.js';
 
 // Rilascia un permesso di caricamento valido 15 minuti per UNA foto: il telefono la invia
@@ -18,38 +17,12 @@ export default async function handler(req, res) {
     if (!(size > 0) || size > MAX) return res.status(413).json({ error: 'foto troppo grande (max 80 MB)' });
     const pathname = `photos/${item}/${Date.now()}-${crypto.randomBytes(5).toString('hex')}.${ext}`;
     const c = cloudinary();
-    if (c) {
-      if (size > 10 * 1024 * 1024) return res.status(413).json({ error: 'foto troppo grande (max 10 MB)' }); // limite del piano gratuito
-      const p = { public_id: pathname.replace(/\.[a-z0-9]+$/, ''), timestamp: Math.floor(Date.now() / 1000) }; // firma valida 1 ora
-      res.setHeader('Cache-Control', 'no-store');
-      return res.status(200).json({ pathname, endpoint: `https://api.cloudinary.com/v1_1/${c.cloud}/image/upload`, fields: { ...p, api_key: c.key, signature: cldSign(p, c.secret) } });
-    }
-    const rw = process.env.BLOB_READ_WRITE_TOKEN || '';
-    const storeId = rw.split('_')[3] || '';
-    const token = await generateClientTokenFromReadWriteToken({
-      token: rw,
-      pathname,
-      allowedContentTypes: [contentType],
-      maximumSizeInBytes: MAX,
-      addRandomSuffix: false,
-      allowOverwrite: false,
-      cacheControlMaxAge: 31536000,
-      validUntil: Date.now() + 15 * 60 * 1000,
-    });
-    countOp('adv'); countOp('uploads');
+    if (!c) return res.status(503).json({ error: 'deposito foto non configurato (CLOUDINARY_URL mancante)' });
+    if (size > 10 * 1024 * 1024) return res.status(413).json({ error: 'foto troppo grande (max 10 MB)' }); // limite del piano gratuito
+    const p = { public_id: pathname.replace(/\.[a-z0-9]+$/, ''), timestamp: Math.floor(Date.now() / 1000) }; // firma valida 1 ora
+    countOp('uploads');
     res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({
-      pathname,
-      endpoint: `https://vercel.com/api/blob/?pathname=${encodeURIComponent(pathname)}`,
-      headers: {
-        authorization: `Bearer ${token}`,
-        'x-api-version': '12',
-        'x-vercel-blob-store-id': storeId,
-        'x-vercel-blob-access': 'public',
-        'x-content-type': contentType,
-        // Nessun altro header: il browser li blocca (CORS). Suffisso, sovrascrittura e cache sono già fissati nel permesso.
-      },
-    });
+    res.status(200).json({ pathname, endpoint: `https://api.cloudinary.com/v1_1/${c.cloud}/image/upload`, fields: { ...p, api_key: c.key, signature: cldSign(p, c.secret) } });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e.message || e) });
