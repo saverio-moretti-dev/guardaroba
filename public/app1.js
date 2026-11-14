@@ -439,7 +439,9 @@ const MIME = {jpg:'image/jpeg', png:'image/png', webp:'image/webp', heic:'image/
 const fileCache = new Map(); // url -> File
 async function photoFile(url, name){
   if (fileCache.has(url)) return fileCache.get(url);
-  const b = await (await fetch(url)).blob();
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('http ' + r.status); // 403 dal Blob bloccato: senza questo il testo d'errore diventava una «foto» da 22 byte
+  const b = await r.blob();
   const f = new File([b], name, {type: MIME[extOf(url)] || b.type || 'image/jpeg'});
   if (fileCache.size > 40) fileCache.clear();
   fileCache.set(url, f); return f;
@@ -459,7 +461,7 @@ async function sendPhotos(id, urls, mode){
   toast(`Preparo ${photos.length} foto…`);
   let files;
   try{ files = await Promise.all(photos.map(p => photoFile(p.url, p.name))); }
-  catch{ return toast('Foto non scaricate: controlla la rete e riprova'); }
+  catch(e){ return toast(/^http 40[34]$/.test(e.message) ? 'Foto non disponibili: sono nel vecchio archivio (Blob) bloccato, vanno ricaricate' : 'Foto non scaricate: controlla la rete e riprova'); }
   const s = sheet(`<h3>${files.length} foto pronte</h3>
     <div class="hint" style="margin-bottom:12px">${mode === 'save' ? `Nel menu che si apre tocca <b>Salva ${files.length > 1 ? files.length + ' immagini' : 'immagine'}</b>: finiscono tutte in Foto.` : 'Scegli l\'app a cui mandarle.'}</div>
     <button class="btn primary block big" data-s="go">${mode === 'save' ? I.dl + 'Salva in galleria' : I.share + 'Condividi'}</button>
@@ -491,13 +493,15 @@ async function downloadFiles(id, photos){
       a.href = URL.createObjectURL(f); a.download = p.name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-    }catch{
+    }catch(e){
+      if (/^http 40[34]$/.test(e.message)){ toast('Foto non disponibili: sono nel vecchio archivio (Blob) bloccato'); continue; }
       a.href = p.url + (p.url.includes('?') ? '&' : '?') + 'download=1'; a.rel = 'noopener';
       document.body.appendChild(a); a.click(); a.remove();
     }
     ok++;
     await new Promise(r => setTimeout(r, 400));
   }
+  if (ok < photos.length) return toast(`${photos.length - ok} foto non disponibili (vecchio archivio Blob bloccato)` + (ok ? `, ${ok} salvate` : ''));
   markCopied(id, 'foto');
   toast(`${ok} foto salvate nel telefono (galleria → Download)`);
 }
