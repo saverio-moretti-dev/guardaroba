@@ -20,7 +20,7 @@ function memStore() {
     async list(prefix) { return [...m.entries()].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => ({ pathname: k, url: 'https://x/' + k, size: v.body.length, uploadedAt: v.at })); },
   };
 }
-const U = (id, n) => `https://abc.public.blob.vercel-storage.com/photos/${id}/${n}.jpg`;
+const U = (id, n) => `https://res.cloudinary.com/demo/image/upload/v1731000000/photos/${id}/${n}.jpg`;
 const DAY = 864e5;
 
 test('cestino: elimina, ripristina, foto mai cancellate subito', () => {
@@ -140,7 +140,7 @@ test('Cloudinary: firma come da documentazione, URL foto accettati', () => {
   // esempio di cloudinary.com/documentation/authentication_signatures
   assert.equal(L.cldSign({ eager: 'w_400,h_300,c_pad|w_260,h_200,c_crop', public_id: 'sample_image', timestamp: 1315060510 }, 'abcd'), 'bfd09f95f331f558cbd1320e67aa8d488770583e');
   assert.ok(L.isPhotoUrl('https://res.cloudinary.com/demo/image/upload/v1731000000/photos/abc123/1731000000000-0a1b2c3d4e.jpg'));
-  assert.ok(L.isPhotoUrl('https://abc.public.blob.vercel-storage.com/photos/abc123/x.jpg'));
+  assert.ok(!L.isPhotoUrl('https://abc.public.blob.vercel-storage.com/photos/abc123/x.jpg')); // Blob tolto (A2)
   assert.ok(!L.isPhotoUrl('https://res.cloudinary.com/demo/image/upload/v1/altro/abc123/x.jpg'));
   assert.ok(!L.isPhotoUrl('https://evil.example/photos/abc123/x.jpg'));
 });
@@ -155,4 +155,11 @@ test('Cloudinary: CLOUDINARY_URL letto anche con prefisso/virgolette, errore chi
     delete process.env.CLOUDINARY_URL;
     assert.equal(L.cloudinary(), null);
   } finally { if (old === undefined) delete process.env.CLOUDINARY_URL; else process.env.CLOUDINARY_URL = old; }
+});
+
+test('cestino: una vecchia foto Blob ripristinata non diventa una foto nulla nella scheda', () => {
+  const db = { items: {}, trash: { items: {}, photos: [{ url: 'https://abc.public.blob.vercel-storage.com/photos/aaaaaa02/x.jpg', itemId: 'aaaaaa02', at: 1 }] } };
+  L.applyOps(db, [{ op: 'upsert', id: 'aaaaaa02', data: { title: 'B' } }, { op: 'restorePhoto', id: 'aaaaaa02', url: 'https://abc.public.blob.vercel-storage.com/photos/aaaaaa02/x.jpg' }], 'S');
+  assert.deepEqual(db.items.aaaaaa02.photos, []);
+  assert.equal(db.trash.photos.length, 0);
 });

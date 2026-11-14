@@ -275,9 +275,8 @@ const ITEM_FIELDS = [
 const SETTINGS_KEYS = ['vintedProfile', 'redripNote', 'defaultParcel', 'descFooter', 'hashtags'];
 
 const isId = (s) => typeof s === 'string' && /^[a-z0-9]{6,16}$/.test(s);
-// Gli URL Blob restano validi solo finché le 141 foto perse non vengono tolte dalle schede (passo A2):
-// toglierli da qui adesso le cancellerebbe in silenzio al primo salvataggio.
-const PHOTO_RE = /^https:\/\/(?:[a-z0-9.-]+\.public\.blob\.vercel-storage\.com|res\.cloudinary\.com\/[a-z0-9_-]+\/image\/upload\/v\d+)\/photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/i;
+// Solo Cloudinary: le foto rimaste su Vercel Blob (store sospeso) sono state tolte dalle schede il 14/11/2026 (passo A2).
+const PHOTO_RE = /^https:\/\/res\.cloudinary\.com\/[a-z0-9_-]+\/image\/upload\/v\d+\/photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/i;
 let photoRe = PHOTO_RE;
 export const setPhotoPattern = (re) => { photoRe = re; };
 export const isPhotoUrl = (u) => typeof u === 'string' && photoRe.test(u);
@@ -324,7 +323,8 @@ export function applyOps(db, ops, by, now = Date.now()) {
       const target = db.items[isId(op.id) ? op.id : p.itemId];
       if (!target) continue;
       T.photos.splice(i, 1);
-      if (!target.photos.some((x) => x.url === p.url)) target.photos.push(cleanPhoto(p));
+      const c = cleanPhoto(p); // null per le vecchie foto Blob del cestino: non rimettere una foto morta
+      if (c && !target.photos.some((x) => x.url === c.url)) target.photos.push(c);
       target.updatedAt = now;
       continue;
     }
