@@ -2,5 +2,10 @@
   "name": "guardaroba",
   "version": "1.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/lib.test.mjs",
+    "collaudo": "node test/collaudo.mjs",
+    "salute": "node tools/salute.mjs"
+  }
 }

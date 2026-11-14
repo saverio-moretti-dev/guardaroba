@@ -1,6 +1,6 @@
 // Service worker: riceve le foto condivise dal telefono ("Condividi" -> Guardaroba)
 // e le mette in una coda locale; la pagina le carica nella cartella aperta.
-const SHELL = 'shell-v4';
+const SHELL = 'shell-v5';
 const ASSETS = ['/', '/app1.js', '/app2.js', '/app3.js', '/manifest.webmanifest', '/icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -39,11 +39,8 @@ async function uploadQueue() {
         const t = await fetch('/api/upload', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: target.id, contentType: type, size: blob.size }) });
         if (!t.ok) throw new Error('permesso ' + t.status);
         const ticket = await t.json();
-        let up;
-        if (ticket.fields) { // Cloudinary: POST multipart, come in app1.js putWithProgress
-          const f = new FormData(); for (const [k, v] of Object.entries(ticket.fields)) f.append(k, v); f.append('file', blob);
-          up = await fetch(ticket.endpoint, { method: 'POST', body: f });
-        } else up = await fetch(ticket.endpoint, { method: 'PUT', headers: ticket.headers, body: blob });
+        const f = new FormData(); for (const [k, v] of Object.entries(ticket.fields || {})) f.append(k, v); f.append('file', blob); // Cloudinary, come in app1.js putWithProgress
+        const up = await fetch(ticket.endpoint, { method: 'POST', body: f });
         if (!up.ok) throw new Error('caricamento ' + up.status);
         const j = await up.json(), url = j.secure_url || j.url;
         const photo = { url, size: blob.size };

@@ -1,4 +1,4 @@
-// Server di prova: usa i VERI handler in api/ con un archivio in memoria che imita Vercel Blob.
+// Server di prova: usa i VERI handler in api/ con un archivio in memoria e un finto Cloudinary.
 // Avvio: APP_CODE=6gfy6gbx node test/mock-server.mjs [porta]
 import http from 'node:http';
 import fs from 'node:fs';
@@ -9,10 +9,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.argv[2] || 8787);
 const BASE = `http://localhost:${PORT}`;
 process.env.APP_CODE ||= '6gfy6gbx';
+process.env.CLOUDINARY_URL = 'cloudinary://mockkey:mocksecret@mockcloud'; // finto: /api/upload vero firma, /cldup controlla la firma
 
 const L = await import(path.join(ROOT, 'api/_lib.js'));
 const handlers = {};
-for (const n of ['db', 'backup', 'login', 'logout', 'me', 'salute']) handlers[n] = (await import(path.join(ROOT, `api/${n}.js`))).default;
+for (const n of ['db', 'backup', 'login', 'logout', 'me', 'salute', 'upload']) handlers[n] = (await import(path.join(ROOT, `api/${n}.js`))).default;
 
 // ---- archivio in memoria ----
 const files = new Map(); // pathname -> {body:Buffer, type, etag, at}
@@ -37,7 +38,7 @@ const readBody = (req) => new Promise((r) => { const a = []; req.on('data', (c) 
 function vres(res) {
   let code = 200;
   return {
-    setHeader: (k, v) => res.setHeader(k, v),
+    setHeader: (k, v) => res.setHeader(k, /^set-cookie$/i.test(k) ? String(v).replace('; Secure', '') : v), // http://localhost: WebKit scarta i cookie Secure
     status(c) { code = c; return this; },
     json(o) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); },
     send(b) { res.writeHead(code); res.end(b); },
@@ -57,18 +58,21 @@ http.createServer(async (req, res) => {
     if (p === '/__test/failUploads') { failNextUploads = +u.searchParams.get('n'); res.writeHead(200); return res.end('ok'); }
     if (p === '/__test/setBackupDay') { const r = await L.readDb({ fresh: true }); r.db.backupDay = '2000-01-01'; await L.setStore; files.get([...files.keys()].find((k) => k.startsWith('data/db-'))).body = Buffer.from(JSON.stringify(r.db)); res.writeHead(200); return res.end('ok'); }
 
-    // --- caricamento diretto (imita https://vercel.com/api/blob/?pathname=...) ---
-    if (p === '/blobput' && req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'PUT', 'access-control-allow-headers': 'authorization,content-type,x-api-version,x-content-type,x-content-length,x-vercel-blob-access,x-vercel-blob-store-id,x-vercel-blob-team-id,x-if-match' }); return res.end(); } // stessa lista ammessa da Vercel Blob
-    if (p === '/blobput' && req.method === 'PUT') {
-      const pathname = u.searchParams.get('pathname');
-      const body = await readBody(req);
-      if (failNextUploads > 0) { failNextUploads--; res.writeHead(503); return res.end('{"error":"busy"}'); }
-      if (!/^photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/.test(pathname || '') || !String(req.headers.authorization || '').startsWith('Bearer mock-')) { res.writeHead(403); return res.end('{}'); }
-      if (files.has(pathname)) { res.writeHead(409); return res.end('{"error":"exists"}'); }
+    // --- caricamento diretto (imita https://api.cloudinary.com/v1_1/<cloud>/image/upload) ---
+    if (p === '/cldup' && req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST' }); return res.end(); }
+    if (p === '/cldup' && req.method === 'POST') {
+      const fd = await new Request(BASE + p, { method: 'POST', headers: { 'content-type': req.headers['content-type'] }, body: await readBody(req) }).formData();
+      const file = fd.get('file'), f = Object.fromEntries([...fd].filter(([k]) => k !== 'file'));
+      const head = { 'content-type': 'application/json', 'access-control-allow-origin': '*' };
+      if (failNextUploads > 0) { failNextUploads--; res.writeHead(503, head); return res.end('{"error":"busy"}'); }
+      const sig = L.cldSign({ public_id: f.public_id, timestamp: f.timestamp }, 'mocksecret');
+      if (f.api_key !== 'mockkey' || f.signature !== sig || !/^photos\/[a-z0-9]{6,16}\/[A-Za-z0-9._-]+$/.test(f.public_id || '') || !file) { res.writeHead(401, head); return res.end('{"error":{"message":"Invalid Signature"}}'); }
+      const pathname = `${f.public_id}.${(file.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`;
+      if (files.has(pathname)) { res.writeHead(409, head); return res.end('{"error":"exists"}'); }
       stats.puts++;
-      files.set(pathname, { body, type: req.headers['x-content-type'], etag: 'e' + (++etagN), at: Date.now() });
-      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-      return res.end(JSON.stringify({ url: `${BASE}/blob/${pathname}`, pathname }));
+      files.set(pathname, { body: Buffer.from(await file.arrayBuffer()), type: file.type, etag: 'e' + (++etagN), at: Date.now() });
+      res.writeHead(200, head);
+      return res.end(JSON.stringify({ secure_url: `${BASE}/blob/${pathname}`, public_id: f.public_id }));
     }
     if (p.startsWith('/blob/')) {
       const f = files.get(decodeURIComponent(p.slice(6)));
@@ -78,21 +82,13 @@ http.createServer(async (req, res) => {
     }
 
     // --- API reali ---
-    if (p === '/api/upload') {
-      const r = vres(res);
-      if (!L.guard(req, r)) return;
-      const b = JSON.parse((await readBody(req)).toString() || '{}');
-      if (!/^[a-z0-9]{6,16}$/.test(b.item || '')) return r.status(400).json({ error: 'id' });
-      if (!/^image\//.test(b.contentType || '')) return r.status(415).json({ error: 'formato' });
-      const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' }[b.contentType] || 'bin';
-      const pathname = `photos/${b.item}/${Date.now()}-${Math.random().toString(16).slice(2, 12)}.${ext}`;
-      return r.json({ pathname, endpoint: `${BASE}/blobput?pathname=${encodeURIComponent(pathname)}`, headers: { authorization: 'Bearer mock-' + Date.now(), 'x-content-type': b.contentType } });
-    }
     const m = /^\/api\/(\w+)$/.exec(p);
     if (m && handlers[m[1]]) {
       const raw = await readBody(req);
       const vreq = Object.assign(req, { query: Object.fromEntries(u.searchParams), body: raw.length && /json/.test(req.headers['content-type'] || '') ? JSON.parse(raw.toString()) : undefined });
-      return await handlers[m[1]](vreq, vres(res));
+      const r = vres(res);
+      if (m[1] === 'upload') { const j = r.json; r.json = (o) => j.call(r, o.endpoint ? { ...o, endpoint: BASE + '/cldup' } : o); } // il permesso vero punta a api.cloudinary.com
+      return await handlers[m[1]](vreq, r);
     }
 
     // --- file statici ---

@@ -49,7 +49,8 @@ su decine di capi, le schede si perdono, si duplicano e nessuno sa a che punto Ã
 npm ci
 node --test test/lib.test.mjs          # logica dati: cestino, backup, concorrenza, import
 node test/mock-server.mjs 8787          # archivio finto in locale
-IMG=<cartella di immagini> node test/e2e.mjs   # collaudo completo nel browser
+npm run collaudo                        # WebKit iPhone 13 + Chromium 390: codice, foto, scarica, 403, offline, lista
+npm run salute                          # online, sola lettura: consumi, foto raggiungibili, codice uguale a public/
 ```
 
 ## Come l'ho costruita

@@ -174,13 +174,12 @@ async function prepareFile(file){
   }catch(e){ console.warn('ricompressione non riuscita, uso l\'originale', e); }
   return {blob:file, type};
 }
-// Permesso con 'fields' (Cloudinary): POST multipart; PUT con 'headers' resta solo per il server di prova.
+// Permesso Cloudinary: POST multipart con i campi firmati dal server.
 function putWithProgress(ticket, body, onProgress){
   return new Promise((res, rej) => {
     const x = new XMLHttpRequest();
-    x.open(ticket.fields ? 'POST' : 'PUT', ticket.endpoint);
-    for (const [k, v] of Object.entries(ticket.headers || {})) x.setRequestHeader(k, v);
-    if (ticket.fields){ const f = new FormData(); for (const [k, v] of Object.entries(ticket.fields)) f.append(k, v); f.append('file', body); body = f; }
+    x.open('POST', ticket.endpoint);
+    const f = new FormData(); for (const [k, v] of Object.entries(ticket.fields || {})) f.append(k, v); f.append('file', body); body = f;
     x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
     x.onload = () => {
       if (x.status >= 200 && x.status < 300){ try{ return res(JSON.parse(x.responseText)); }catch{ return rej(new Error('risposta non valida')); } }
