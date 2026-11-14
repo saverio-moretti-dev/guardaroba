@@ -1,6 +1,6 @@
 // Service worker: riceve le foto condivise dal telefono ("Condividi" -> Guardaroba)
 // e le mette in una coda locale; la pagina le carica nella cartella aperta.
-const SHELL = 'shell-v3';
+const SHELL = 'shell-v4';
 const ASSETS = ['/', '/app1.js', '/app2.js', '/app3.js', '/manifest.webmanifest', '/icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -47,7 +47,8 @@ async function uploadQueue() {
         if (!up.ok) throw new Error('caricamento ' + up.status);
         const j = await up.json(), url = j.secure_url || j.url;
         const photo = { url, size: blob.size };
-        await fetch('/api/db', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops: [{ op: 'addPhotos', id: target.id, photos: [photo] }], by: 'sfondo' }) });
+        const sv = await fetch('/api/db', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops: [{ op: 'addPhotos', id: target.id, photos: [photo] }], by: 'sfondo' }) });
+        if (!sv.ok) throw new Error('salvataggio ' + sv.status); // la foto resta in coda: senza questo restava su Cloudinary ma fuori da ogni scheda (shortcut: al nuovo tentativo la foto si ricarica, un doppione orfano su Cloudinary)
         await done.put('/done/' + key, new Response(JSON.stringify({ key, target, seq, ...photo }), { headers: { 'content-type': 'application/json' } }));
         await pend.delete(req); // solo dopo aver scritto il risultato
       });

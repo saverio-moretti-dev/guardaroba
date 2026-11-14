@@ -356,7 +356,9 @@ function settingsSheet(){
         s.remove(); render(); toast('App attivata ✓'); settingsSheet();
       }catch(err){ $('#s_err', s).textContent = err.message; a.disabled = false; }
     } else if (act === 'logout'){
-      await fetch('/api/logout', {method:'POST'}); S.authed = false; s.remove(); render(); toast('Disattivata su questo dispositivo');
+      const r = await fetch('/api/logout', {method:'POST'}).catch(() => null);
+      if (!r || !r.ok) return toast('Disattivazione non riuscita: controlla la rete');
+      S.authed = false; s.remove(); render(); toast('Disattivata su questo dispositivo');
     } else if (act === 'trash'){ s.remove(); trashSheet();
     } else if (act === 'backups'){ s.remove(); backupsSheet();
     } else if (act === 'export'){ exportBackup();
