@@ -13,6 +13,9 @@ const ws = new WebSocket(tgt.webSocketDebuggerUrl); await new Promise((r) => ws.
 let n = 0; const send = (method, params = {}) => new Promise((r) => { const id = ++n; ws.addEventListener('message', function h(e) { const m = JSON.parse(e.data); if (m.id === id) { ws.removeEventListener('message', h); r(m); } }); ws.send(JSON.stringify({ id, method, params })); });
 const ops = Array.from({ length: N }, (_, i) => ({ op: 'upsert', id: 'it' + String(i).padStart(6, '0'), data: { title: 't' + i, description: 'x'.repeat(1000) } }));
 await send('Page.enable');
+// dal codice d'accesso (546d76a) senza cookie l'API risponde 401: login sul mock e cookie al browser
+const sess = (await fetch(`http://localhost:${PORT}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"code":"t"}' })).headers.get('set-cookie').split(';')[0].split('=');
+await send('Network.setCookie', { name: sess[0], value: sess[1], url: `http://localhost:${PORT}/` });
 await send('Page.addScriptToEvaluateOnNewDocument', { source: `if(!localStorage.getItem('seeded')){localStorage.setItem('seeded','1');localStorage.setItem('opsQueue',${JSON.stringify(JSON.stringify(ops))});}` });
 await send('Page.navigate', { url: `http://localhost:${PORT}/` });
 let st; for (let t = 0; t < 30; t++) { await sleep(500); st = await (await fetch(`http://localhost:${PORT}/__test/state`)).json(); if (Object.keys(st.db.items).length >= N) break; }
